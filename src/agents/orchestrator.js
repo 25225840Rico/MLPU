@@ -25,27 +25,36 @@ async function ask(system, userText, imageB64 = null) {
   })
   if (!r.ok) { const e = await r.json(); throw new Error(e.error?.message || r.statusText) }
   const raw = (await r.json()).content?.[0]?.text || '{}'
-  return JSON.parse(raw.replace(/```json|```/g, '').trim())
+  try {
+    const match = raw.match(/\{[\s\S]*\}/)
+    return JSON.parse(match ? match[0] : '{}')
+  } catch (e) {
+    console.error('[orchestrator] JSON parse failed. Raw response:', raw)
+    throw new Error('Respuesta inválida del modelo: ' + e.message)
+  }
 }
 
 export async function analyzeProduct(imageB64) {
   const [vision, seo, price, category] = await Promise.all([
     ask(
-      'Eres experto en productos. Analiza la imagen y responde SOLO JSON: {"product":"nombre producto","brand":"marca o null","condition":"new o used","features":["f1","f2"]}',
-      'Analiza este producto.',
+      'Analiza la imagen con detalle. Identifica el producto exacto, marca visible, modelo si aparece, estado físico (nuevo/usado) y características clave. Responde SOLO JSON sin texto extra: {"product":"nombre específico del producto","brand":"marca exacta o null","condition":"new o used","features":["característica 1","característica 2","característica 3"]}',
+      'Mira la imagen e identifica este producto.',
       imageB64
     ),
     ask(
-      'Eres SEO expert MercadoLibre Chile. Responde SOLO JSON: {"title":"título máx 60 chars con marca modelo característica"}',
-      'Crea título SEO para MercadoLibre Chile.'
+      'Eres experto en SEO de MercadoLibre Chile. Mira la imagen del producto y crea un título optimizado: incluye marca + tipo de producto + característica principal. Máximo 60 caracteres. Sin signos de puntuación innecesarios. Responde SOLO JSON sin texto extra: {"title":"título exacto"}',
+      'Crea el título SEO para MercadoLibre Chile basándote en lo que ves en la imagen.',
+      imageB64
     ),
     ask(
-      'Eres experto en precios Chile. Responde SOLO JSON: {"price":número_entero_CLP}',
-      'Estima precio competitivo en CLP para MercadoLibre.'
+      'Eres experto en precios del mercado chileno. Mira la imagen y estima el precio justo en MercadoLibre Chile (CLP) considerando: tipo de producto, marca, estado visible, demanda en Chile. Responde SOLO JSON sin texto extra: {"price":numeroEnteroSinPuntos}',
+      'Estima el precio en CLP para este producto viendo la imagen.',
+      imageB64
     ),
     ask(
-      'Eres experto en categorías MercadoLibre Chile. Responde SOLO JSON: {"searches":["búsqueda1","búsqueda2","búsqueda3"]}',
-      'Dame 3 términos de búsqueda de categoría para este producto.'
+      'Eres experto en la taxonomía de MercadoLibre Chile. Mira la imagen e identifica la categoría exacta del producto. Devuelve 3 términos de búsqueda específicos (no genéricos) para encontrar la categoría correcta en MercadoLibre. Responde SOLO JSON sin texto extra: {"searches":["término específico 1","término específico 2","término específico 3"]}',
+      'Identifica la categoría de MercadoLibre Chile para este producto viendo la imagen.',
+      imageB64
     )
   ])
 

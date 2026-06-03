@@ -120,7 +120,7 @@ hr{border:none;border-top:1px solid var(--brd)}
 
 export default function App() {
   const [screen, setScreen] = useState(S.ONBOARDING)
-  const [appId, setAppId] = useState('')
+  const [appId, setAppId] = useState('3829359465845583')
   const [token, setToken] = useState('')
   const [tokenDraft, setTokenDraft] = useState('')
 
