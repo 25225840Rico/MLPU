@@ -319,7 +319,7 @@ export default function App() {
         available_quantity: 1,
         buying_mode:        'buy_it_now',
         condition:          analysis.condition,
-        listing_type_id:    'gold_special',
+        listing_type_id:    'free',
         description:        { plain_text: description },
         ...(pictures.length && { pictures })
       }
@@ -333,7 +333,11 @@ export default function App() {
       const data = await r.json()
       console.log('[publish] Respuesta ML:', data)
 
-      if (!r.ok) throw new Error(data.message || JSON.stringify(data.cause || data))
+      if (!r.ok) {
+        const causes = (data.cause || []).map(c => c.message || c.code || JSON.stringify(c)).join(' | ')
+        console.error('[publish] Causes:', JSON.stringify(data.cause, null, 2))
+        throw new Error(`${data.message}${causes ? ': ' + causes : ''}`)
+      }
 
       setResult(data)
       setCount(c => c + 1)
