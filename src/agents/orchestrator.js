@@ -1,3 +1,6 @@
+const DEBUG = false
+const log = (...a) => { if (DEBUG) console.log(...a) }
+
 export async function compressImage(b64, maxW = 1024, quality = 0.82) {
   return new Promise(resolve => {
     const img = new Image()
@@ -15,7 +18,7 @@ export async function compressImage(b64, maxW = 1024, quality = 0.82) {
 }
 
 async function ask(agentName, system, imageB64, apiKey) {
-  console.log(`[${agentName}] → Claude...`)
+  log(`[${agentName}] →`)
   const content = imageB64
     ? [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageB64 } },
@@ -41,29 +44,24 @@ async function ask(agentName, system, imageB64, apiKey) {
 
   if (!r.ok) {
     const e = await r.json()
-    console.error(`[${agentName}] HTTP ${r.status}:`, e)
     throw new Error(e.error?.message || `HTTP ${r.status}`)
   }
 
   const raw = (await r.json()).content?.[0]?.text || '{}'
-  console.log(`[${agentName}] ←`, raw.slice(0, 120))
+  log(`[${agentName}] ←`, raw.slice(0, 80))
 
+  const match = raw.match(/\{[\s\S]*\}/)
+  if (!match) throw new Error(`Respuesta inválida de ${agentName}`)
   try {
-    const match = raw.match(/\{[\s\S]*\}/)
-    const parsed = JSON.parse(match ? match[0] : '{}')
-    console.log(`[${agentName}] ✓`, parsed)
-    return parsed
+    return JSON.parse(match[0])
   } catch (e) {
-    console.error(`[${agentName}] JSON fail. Raw:`, raw)
     throw new Error(`JSON inválido de ${agentName}: ${e.message}`)
   }
 }
 
 export async function analyzeProduct(imageB64, apiKey) {
   if (!apiKey) throw new Error('Anthropic API key no configurada.')
-  console.log('[orchestrator] Comprimiendo...')
   const compressed = await compressImage(imageB64)
-  console.log('[orchestrator] Lanzando 4 agentes...')
 
   const [vision, seo, price, category] = await Promise.all([
     ask('Vision',
@@ -91,7 +89,6 @@ export async function analyzeProduct(imageB64, apiKey) {
     price:            Number(price.price) || 10000,
     categorySearches: category.searches || []
   }
-  console.log('[orchestrator] ✓', result)
   return result
 }
 
@@ -113,8 +110,7 @@ Responde SOLO JSON: {"ID_ATTR": "valor_elegido", "OTRO_ID": "valor"}`,
       null, apiKey
     )
     return result || {}
-  } catch (e) {
-    console.warn('[attrs-ai]', e.message)
+  } catch {
     return {}
   }
 }

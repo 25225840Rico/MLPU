@@ -104,15 +104,15 @@ const fmt = n => Number(n || 0).toLocaleString('es-CL')
 
 const css = `
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap');
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
   --bg:#06060a;--s1:#0e0e18;--s2:#16162a;--s3:#1e1e32;
   --brd:#28283e;--brd2:#38385a;
   --y:#ffe234;--g:#00d4a0;--r:#ff4f7b;--b:#3483fa;
   --txt:#e0e0f0;--dim:#5858a0;--mono:'JetBrains Mono',monospace;
 }
-body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-serif;min-height:100dvh}
-.app{max-width:430px;margin:0 auto;padding:16px 14px 80px;display:flex;flex-direction:column;gap:16px}
+body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-serif;min-height:100dvh;overscroll-behavior:none}
+.app{max-width:430px;margin:0 auto;padding:16px 14px max(80px,calc(60px + env(safe-area-inset-bottom)));display:flex;flex-direction:column;gap:16px}
 .top{display:flex;align-items:center;gap:8px;padding-bottom:14px;border-bottom:1px solid var(--brd)}
 .logo{background:var(--y);color:#000;font-size:9px;font-weight:800;letter-spacing:2px;padding:4px 8px;border-radius:5px}
 .top h1{font-size:16px;font-weight:700;flex:1}.top h1 em{color:var(--y);font-style:normal}
@@ -121,13 +121,13 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .card h2{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:var(--dim)}
 .f{display:flex;flex-direction:column;gap:4px}
 .f label,.lbl{font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:1.2px}
-.f input,.f select,.f textarea,.ei{background:var(--s1);border:1px solid var(--brd);border-radius:9px;color:var(--txt);font-family:var(--mono);font-size:12px;padding:10px 12px;outline:none;width:100%;transition:border-color .15s;resize:vertical}
+.f input,.f select,.f textarea,.ei{background:var(--s1);border:1px solid var(--brd);border-radius:9px;color:var(--txt);font-family:var(--mono);font-size:16px;padding:10px 12px;outline:none;width:100%;transition:border-color .15s;resize:vertical;-webkit-appearance:none;appearance:none}
 .f input:focus,.f select:focus,.f textarea:focus,.ei:focus{border-color:var(--y)}
 .f input::placeholder,.ei::placeholder{color:var(--dim);opacity:.6}
 .f select option{background:var(--s1)}
 .note{font-size:11px;color:var(--dim);background:var(--s3);border:1px solid var(--brd);border-radius:8px;padding:10px 13px;line-height:1.8}
 .note code{color:var(--g);font-family:var(--mono);font-size:10px;word-break:break-all}
-.btn{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;border:none;border-radius:12px;cursor:pointer;padding:13px 18px;transition:all .1s;display:inline-flex;align-items:center;justify-content:center;gap:7px}
+.btn{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;border:none;border-radius:12px;cursor:pointer;padding:13px 18px;transition:all .1s;display:inline-flex;align-items:center;justify-content:center;gap:7px;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .btn:active{transform:scale(.96)}
 .btn-y{background:var(--y);color:#000;width:100%;font-size:15px;padding:15px}
 .btn-y:hover{background:#f0d400}
@@ -154,21 +154,21 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .focus-lbl{position:absolute;top:12px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap;pointer-events:none}
 .focus-lbl.ready{background:rgba(0,212,160,.9);color:#000}
 .focus-lbl.seeking{background:rgba(255,79,123,.85);color:#fff}
-.shutter{width:70px;height:70px;border-radius:50%;background:var(--y);border:4px solid rgba(255,226,52,.25);cursor:pointer;box-shadow:0 0 0 2px var(--y);margin:0 auto;transition:transform .1s;display:flex;align-items:center;justify-content:center}
+.shutter{width:70px;height:70px;border-radius:50%;background:var(--y);border:4px solid rgba(255,226,52,.25);cursor:pointer;box-shadow:0 0 0 2px var(--y);margin:0 auto;transition:transform .1s;display:flex;align-items:center;justify-content:center;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .shutter:active{transform:scale(.88)}
 .shutter-ring{width:86px;height:86px;border-radius:50%;border:1.5px solid rgba(255,226,52,.2);display:flex;align-items:center;justify-content:center;margin:0 auto}
 .shutter-inner{width:30px;height:30px;border-radius:50%;background:#000;pointer-events:none}
 .cam-actions{display:flex;flex-direction:column;gap:12px;align-items:center}
 .photo-strip{display:flex;gap:8px;overflow-x:auto;padding:4px 0;-webkit-overflow-scrolling:touch}
 .photo-strip::-webkit-scrollbar{height:3px}.photo-strip::-webkit-scrollbar-thumb{background:var(--brd);border-radius:2px}
-.pthumb{position:relative;flex-shrink:0;width:72px;height:72px;border-radius:10px;overflow:hidden;border:2px solid var(--brd);cursor:pointer;transition:border-color .15s}
+.pthumb{position:relative;flex-shrink:0;width:72px;height:72px;border-radius:10px;overflow:hidden;border:2px solid var(--brd);cursor:pointer;transition:border-color .15s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .pthumb.main{border-color:var(--y);box-shadow:0 0 0 1px var(--y)}
-.pthumb img{width:100%;height:100%;object-fit:cover}
-.pthumb .mb{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);font-size:7px;font-weight:800;background:var(--y);color:#000;padding:1px 4px;border-radius:4px;white-space:nowrap}
-.pthumb .del{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.75);color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1px solid rgba(255,255,255,.25);line-height:1}
-.add-photo{flex-shrink:0;width:72px;height:72px;border-radius:10px;border:2px dashed var(--brd2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;color:var(--dim);font-size:9px;gap:4px;transition:border-color .15s}
+.pthumb img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+.pthumb .mb{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);font-size:7px;font-weight:800;background:var(--y);color:#000;padding:1px 4px;border-radius:4px;white-space:nowrap;pointer-events:none}
+.pthumb .del{position:absolute;top:-2px;right:-2px;width:24px;height:24px;border-radius:50%;background:rgba(20,20,40,.9);color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1.5px solid rgba(255,255,255,.3);touch-action:manipulation}
+.add-photo{flex-shrink:0;width:72px;height:72px;border-radius:10px;border:2px dashed var(--brd2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;color:var(--dim);font-size:9px;gap:4px;transition:border-color .15s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .add-photo:hover,.add-photo:active{border-color:var(--y);color:var(--y)}
-.add-photo span{font-size:22px}
+.add-photo span{font-size:22px;pointer-events:none}
 .loader{background:var(--s2);border:1px solid var(--brd);border-radius:18px;padding:36px 22px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}
 .ring{width:72px;height:72px;border-radius:50%;border:3px solid var(--brd2);border-top-color:var(--y);animation:spin .7s linear infinite}
 .ring-sm{width:16px;height:16px;border-radius:50%;border:2px solid var(--brd2);border-top-color:var(--y);animation:spin .7s linear infinite;display:inline-block}
@@ -182,7 +182,7 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .thumb-16{border-radius:14px;overflow:hidden;aspect-ratio:16/9;border:1px solid var(--brd)}
 .thumb-16 img{width:100%;height:100%;object-fit:cover}
 .cat-list{display:flex;flex-direction:column;gap:8px}
-.cat-item{background:var(--s2);border:1px solid var(--brd);border-radius:13px;padding:13px 15px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;transition:all .12s}
+.cat-item{background:var(--s2);border:1px solid var(--brd);border-radius:13px;padding:13px 15px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;transition:all .12s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .cat-item:hover{border-color:var(--y);background:var(--s3)}
 .cat-item.no-id{opacity:.6;cursor:not-allowed}
 .cat-name{font-size:14px;font-weight:600}
@@ -210,7 +210,7 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:9px 0}
 .toggle-label{font-size:13px;font-weight:600}
 .toggle-sub{font-size:11px;color:var(--dim);margin-top:1px}
-.toggle{width:40px;height:22px;border-radius:11px;background:var(--brd2);cursor:pointer;position:relative;transition:background .15s;flex-shrink:0;border:none}
+.toggle{width:40px;height:22px;border-radius:11px;background:var(--brd2);cursor:pointer;position:relative;transition:background .15s;flex-shrink:0;border:none;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .toggle.on{background:var(--y)}
 .toggle::after{content:'';position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:3px;left:3px;transition:left .15s}
 .toggle.on::after{left:21px;background:#000}
@@ -244,6 +244,23 @@ hr{border:none;border-top:1px solid var(--brd)}
 const LS = {
   get: k => { try { return localStorage.getItem(k) || '' } catch { return '' } },
   set: (k, v) => { try { localStorage.setItem(k, v) } catch {} }
+}
+
+function PhotoStrip({ imgs, onReorder, onDelete, onAdd, showAdd = true }) {
+  return (
+    <div className="photo-strip">
+      {imgs.map((b64, i) => (
+        <div key={i} className={`pthumb${i === 0 ? ' main' : ''}`} onClick={() => i !== 0 && onReorder(i)}>
+          <img src={`data:image/jpeg;base64,${b64}`} alt="" />
+          {i === 0 && <div className="mb">PRINCIPAL</div>}
+          <div className="del" onClick={e => { e.stopPropagation(); onDelete(i) }}>✕</div>
+        </div>
+      ))}
+      {showAdd && imgs.length < 8 && (
+        <div className="add-photo" onClick={onAdd}><span>+</span><div>Agregar</div></div>
+      )}
+    </div>
+  )
 }
 
 export default function App() {
@@ -355,30 +372,37 @@ export default function App() {
   const handleFiles = useCallback((files) => {
     const list = Array.from(files).filter(f => f.type.startsWith('image/')).slice(0, 8)
     if (!list.length) return
-    let loaded = []
+    // Use index-based array to preserve file selection order across async callbacks
+    const loaded = new Array(list.length)
     let done = 0
-    list.forEach(f => {
+    list.forEach((f, idx) => {
       const r = new FileReader()
       r.onload = ev => {
-        loaded.push(ev.target.result.split(',')[1])
-        done++
-        if (done === list.length) {
-          addImgs(loaded)
+        loaded[idx] = ev.target.result.split(',')[1]
+        if (++done === list.length) {
+          addImgs(loaded.filter(Boolean))
           stopCam()
           setScreen(S.PREVIEW)
+          if (fileRef.current) fileRef.current.value = ''
         }
       }
+      r.onerror = () => { if (++done === list.length && loaded.some(Boolean)) { addImgs(loaded.filter(Boolean)); stopCam(); setScreen(S.PREVIEW) } }
       r.readAsDataURL(f)
     })
   }, [addImgs, stopCam])
 
   // Drag & drop
-  const onDragOver  = e => { e.preventDefault(); setDragOver(true) }
-  const onDragLeave = () => setDragOver(false)
-  const onDrop      = e => {
+  const onDragOver  = useCallback(e => { e.preventDefault(); setDragOver(true) }, [])
+  const onDragLeave = useCallback(() => setDragOver(false), [])
+  const onDrop      = useCallback(e => {
     e.preventDefault(); setDragOver(false)
     handleFiles([...e.dataTransfer.files])
-  }
+  }, [handleFiles])
+
+  // Stable callbacks for PhotoStrip (avoids inline arrow fn on each render)
+  const onReorderImg = useCallback(i => setImgs(prev => [prev[i], ...prev.filter((_, j) => j !== i)]), [])
+  const onDeleteImg  = useCallback(i => setImgs(prev => prev.filter((_, j) => j !== i)), [])
+  const onAddPhoto   = useCallback(() => fileRef.current?.click(), [])
 
   // ── AUTO-CAPTURE sharpness loop
   useEffect(() => {
@@ -611,26 +635,6 @@ export default function App() {
   useEffect(() => () => { stopCam(); clearInterval(sharpTimer.current); clearTimeout(commTimer.current) }, [])
 
   const LT_LABELS = { free: 'Gratuita', gold_special: 'Clásica', gold_pro: 'Premium' }
-
-  // ── PHOTO STRIP component (reusable)
-  const PhotoStrip = ({ showAdd = true }) => (
-    <div className="photo-strip">
-      {imgs.map((b64, i) => (
-        <div key={i} className={`pthumb${i === 0 ? ' main' : ''}`}
-          onClick={() => { if (i !== 0) setImgs(prev => [prev[i], ...prev.filter((_, j) => j !== i)]) }}>
-          <img src={`data:image/jpeg;base64,${b64}`} alt={`foto ${i+1}`} />
-          {i === 0 && <div className="mb">PRINCIPAL</div>}
-          <div className="del" onClick={e => { e.stopPropagation(); setImgs(prev => prev.filter((_, j) => j !== i)) }}>✕</div>
-        </div>
-      ))}
-      {showAdd && imgs.length < 8 && (
-        <div className="add-photo" onClick={() => fileRef.current?.click()}>
-          <span>+</span><div>Agregar</div>
-        </div>
-      )}
-    </div>
-  )
-
   const camClass = `cam${borderState === 'focused' ? ' focused' : borderState === 'searching' ? ' searching' : ''}${dragOver ? ' dragover' : ''}`
 
   return (
@@ -704,7 +708,7 @@ export default function App() {
             </div>
             <canvas ref={canvasRef} style={{display:'none'}} />
             <canvas ref={smallCanvas} style={{display:'none'}} />
-            {imgs.length > 0 && <PhotoStrip />}
+            {imgs.length > 0 && <PhotoStrip imgs={imgs} onReorder={onReorderImg} onDelete={onDeleteImg} onAdd={onAddPhoto} />}
             <div className="cam-actions">
               {!stream ? (
                 <>
@@ -745,7 +749,7 @@ export default function App() {
         {screen === S.PREVIEW && imgs.length > 0 && (
           <>
             <div className="cam"><img src={`data:image/jpeg;base64,${imgs[0]}`} alt="preview" /></div>
-            {imgs.length > 0 && <PhotoStrip />}
+            {imgs.length > 0 && <PhotoStrip imgs={imgs} onReorder={onReorderImg} onDelete={onDeleteImg} onAdd={onAddPhoto} />}
             <button className="btn btn-y" onClick={analyze}>
               ⚡ Analizar con IA{imgs.length > 1 ? ` (${imgs.length} fotos)` : ''}
             </button>
@@ -829,7 +833,7 @@ export default function App() {
               {imgs.length > 1 && (
                 <div>
                   <div style={{fontSize:10,color:'var(--dim)',marginBottom:6,textTransform:'uppercase',letterSpacing:'1px'}}>Fotos ({imgs.length}) — toca para cambiar principal</div>
-                  <PhotoStrip showAdd={false} />
+                  <PhotoStrip imgs={imgs} onReorder={onReorderImg} onDelete={onDeleteImg} onAdd={onAddPhoto} showAdd={false} />
                 </div>
               )}
             </div>
