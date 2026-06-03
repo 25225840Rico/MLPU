@@ -144,8 +144,8 @@ export default function App() {
   const [tokenDraft, setTokenDraft] = useState(() => LS.get('ml_token')        || '')
   const [anthKey,    setAnthKey]    = useState(() => LS.get('anthropic_key')   || '')
   const [anthDraft,  setAnthDraft]  = useState(() => LS.get('anthropic_key')   || '')
-  const [proxyUrl,   setProxyUrl]   = useState(() => LS.get('proxy_url')       || '')
-  const [proxyDraft, setProxyDraft] = useState(() => LS.get('proxy_url')       || '')
+  const [proxyUrl,   setProxyUrl]   = useState(() => LS.get('proxy_url')       || 'https://broad-pond-c45emlpup.aronricocl.workers.dev')
+  const [proxyDraft, setProxyDraft] = useState(() => LS.get('proxy_url')       || 'https://broad-pond-c45emlpup.aronricocl.workers.dev')
 
   // ML API base: usa proxy para llamadas autenticadas si está configurado
   const mlBase = useCallback((path) => {
