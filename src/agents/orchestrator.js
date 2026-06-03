@@ -1,5 +1,3 @@
-const KEY = import.meta.env.VITE_ANTHROPIC_KEY
-
 // Resize image to max 1024px before sending to API (saves bandwidth and avoids timeouts)
 export async function compressImage(b64, maxW = 1024, quality = 0.82) {
   return new Promise(resolve => {
@@ -17,13 +15,13 @@ export async function compressImage(b64, maxW = 1024, quality = 0.82) {
   })
 }
 
-async function ask(agentName, system, imageB64) {
+async function ask(agentName, system, imageB64, apiKey) {
   console.log(`[${agentName}] → enviando request a Claude...`)
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': KEY,
+      'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true'
     },
@@ -61,7 +59,9 @@ async function ask(agentName, system, imageB64) {
   }
 }
 
-export async function analyzeProduct(imageB64) {
+export async function analyzeProduct(imageB64, apiKey) {
+  if (!apiKey) throw new Error('Anthropic API key no configurada. Vuelve al inicio y agrégala.')
+
   console.log('[orchestrator] Comprimiendo imagen...')
   const compressed = await compressImage(imageB64)
   console.log(`[orchestrator] Imagen lista. Lanzando 4 agentes en paralelo...`)
@@ -71,26 +71,26 @@ export async function analyzeProduct(imageB64) {
     ask('Vision', `Eres experto en productos. Mira la imagen con detalle.
 Identifica: tipo exacto de producto, marca visible (si no hay marca escribe null), modelo si aparece, estado físico del producto, 3-4 características clave.
 Responde SOLO JSON sin texto ni markdown:
-{"product":"nombre específico","brand":"marca exacta o null","model":"modelo o null","condition":"new o used","features":["feat1","feat2","feat3"],"description":"2 oraciones describiendo el producto, materiales, estado y uso"}`, compressed),
+{"product":"nombre específico","brand":"marca exacta o null","model":"modelo o null","condition":"new o used","features":["feat1","feat2","feat3"],"description":"2 oraciones describiendo el producto, materiales, estado y uso"}`, compressed, apiKey),
 
     ask('SEO', `Eres especialista en SEO de MercadoLibre Chile.
 Mira la imagen e identifica el producto. Crea un título que incluya: marca + tipo de producto + característica principal.
 Máximo 60 caracteres. Sin símbolos innecesarios. Sin "Vendo" ni "Precio".
 Responde SOLO JSON sin texto ni markdown:
-{"title":"título optimizado aquí"}`, compressed),
+{"title":"título optimizado aquí"}`, compressed, apiKey),
 
     ask('Precio', `Eres experto en precios del mercado chileno.
 Mira la imagen del producto. Estima el precio justo en MercadoLibre Chile (CLP) para este producto según: marca, tipo, estado visible, demanda en Chile.
 Responde SOLO JSON sin texto ni markdown:
 {"price":15000}
-(reemplaza el número por el precio real estimado, solo el número entero sin puntos ni comas)`, compressed),
+(reemplaza el número por el precio real estimado, solo el número entero sin puntos ni comas)`, compressed, apiKey),
 
     ask('Categoria', `Eres experto en la taxonomía de MercadoLibre Chile.
 Mira la imagen. Identifica la categoría exacta del producto.
 Dame 3 términos de búsqueda ESPECÍFICOS (no genéricos) para encontrar esta categoría en MercadoLibre Chile.
 Por ejemplo si es un iPhone: "iPhone 14 smartphone", no solo "teléfono".
 Responde SOLO JSON sin texto ni markdown:
-{"searches":["término específico 1","término específico 2","término específico 3"]}`, compressed)
+{"searches":["término específico 1","término específico 2","término específico 3"]}`, compressed, apiKey)
 
   ])
 

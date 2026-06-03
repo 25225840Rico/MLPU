@@ -132,11 +132,18 @@ hr{border:none;border-top:1px solid var(--brd)}
 ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:var(--brd);border-radius:2px}
 `
 
+const LS = {
+  get: k => { try { return localStorage.getItem(k) || '' } catch { return '' } },
+  set: (k, v) => { try { localStorage.setItem(k, v) } catch {} }
+}
+
 export default function App() {
   const [screen, setScreen] = useState(S.ONBOARDING)
-  const [appId,  setAppId]  = useState('3829359465845583')
-  const [token,  setToken]  = useState('')
-  const [tokenDraft, setTokenDraft] = useState('')
+  const [appId,      setAppId]      = useState(() => LS.get('ml_app_id')      || '3829359465845583')
+  const [token,      setToken]      = useState(() => LS.get('ml_token')        || '')
+  const [tokenDraft, setTokenDraft] = useState(() => LS.get('ml_token')        || '')
+  const [anthKey,    setAnthKey]    = useState(() => LS.get('anthropic_key')   || '')
+  const [anthDraft,  setAnthDraft]  = useState(() => LS.get('anthropic_key')   || '')
 
   const videoRef  = useRef(null)
   const canvasRef = useRef(null)
@@ -207,7 +214,7 @@ export default function App() {
     console.log('[analyze] Iniciando análisis...')
 
     try {
-      const a = await analyzeProduct(img)
+      const a = await analyzeProduct(img, anthKey)
       setAnalysis(a)
 
       // Buscar categorías en ML
@@ -253,7 +260,7 @@ export default function App() {
       setErr('Error en análisis: ' + e.message)
       setScreen(S.PREVIEW)
     }
-  }, [img])
+  }, [img, anthKey])
 
   // ── PUBLISH
   const publish = useCallback(async () => {
@@ -368,7 +375,7 @@ export default function App() {
                 <code>POST mercadolibre.com/oauth/token</code> con <code>grant_type=authorization_code</code>
               </div>
               <div className="f">
-                <label>Access Token</label>
+                <label>Access Token de MercadoLibre</label>
                 <input
                   value={tokenDraft}
                   onChange={e => setTokenDraft(e.target.value)}
@@ -376,14 +383,32 @@ export default function App() {
                   autoComplete="off"
                 />
               </div>
-              {!import.meta.env.VITE_ANTHROPIC_KEY && (
-                <div className="warn">⚠ VITE_ANTHROPIC_KEY no configurada en el servidor</div>
-              )}
+              <hr />
+              <div className="f">
+                <label>Anthropic API Key</label>
+                <input
+                  type="password"
+                  value={anthDraft}
+                  onChange={e => setAnthDraft(e.target.value)}
+                  placeholder="sk-ant-api03-..."
+                  autoComplete="off"
+                />
+              </div>
+              <div className="note">
+                Se guarda solo en tu navegador (<code>localStorage</code>). Nunca se sube a ningún servidor.
+              </div>
             </div>
             <button
               className="btn btn-y"
-              disabled={!appId || !tokenDraft}
-              onClick={() => { setToken(tokenDraft); setScreen(S.CAMERA) }}
+              disabled={!appId || !tokenDraft || !anthDraft}
+              onClick={() => {
+                LS.set('ml_app_id',     appId)
+                LS.set('ml_token',      tokenDraft)
+                LS.set('anthropic_key', anthDraft)
+                setToken(tokenDraft)
+                setAnthKey(anthDraft)
+                setScreen(S.CAMERA)
+              }}
             >
               Comenzar →
             </button>
