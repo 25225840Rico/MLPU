@@ -218,6 +218,9 @@ export default function App() {
   const [shippingCost,  setShippingCost]  = useState(3000)
   const [productCost,   setProductCost]   = useState(0)
 
+  // ── Missing attrs after failed publish (highlighted in red)
+  const [missingAttrIds, setMissingAttrIds] = useState([])
+
   // ── CAMERA
   const stopCam = useCallback(() => {
     if (stream) { stream.getTracks().forEach(t => t.stop()); setStream(null) }
@@ -294,6 +297,7 @@ export default function App() {
     setListingType('free')
     setRequiredAttrs([])
     setAttrValues({})
+    setMissingAttrIds([])
     setCommissions(null)
     setCompPrices(null)
     setFreeShipping(false)
@@ -310,7 +314,8 @@ export default function App() {
     ;(async () => {
       setLoadingAttrs(true)
       try {
-        const r = await fetch(`${ML}/categories/${selCat.id}/attributes`)
+        const headers = token ? { Authorization: `Bearer ${token}` } : {}
+        const r = await fetch(mlBase(`/categories/${selCat.id}/attributes`), { headers })
         if (cancelled) return
         const data = await r.json()
         const needed = (Array.isArray(data) ? data : [])
@@ -349,7 +354,7 @@ export default function App() {
     })()
 
     return () => { cancelled = true }
-  }, [screen, selCat?.id])
+  }, [screen, selCat?.id, token, mlBase])
 
   // ── FETCH COMMISSIONS (debounced 500ms on price/type change)
   useEffect(() => {
@@ -428,7 +433,9 @@ export default function App() {
         description:        { plain_text: editDesc || editTitle },
         ...(pictures.length  && { pictures }),
         ...(attributes.length && { attributes }),
-        shipping: { mode: 'me2', free_shipping: freeShipping, local_pick_up: localPickup },
+        shipping: freeShipping
+          ? { mode: 'me2', free_methods: [], free_shipping: true,  local_pick_up: localPickup }
+          : { mode: 'me2',                   free_shipping: false, local_pick_up: localPickup },
         sale_terms: [
           { id: 'WARRANTY_TYPE', value_name: 'Garantía del vendedor' },
           { id: 'WARRANTY_TIME',  value_name: '30 días' }
@@ -445,8 +452,17 @@ export default function App() {
       console.log('[publish] response:', data)
 
       if (!r.ok) {
-        const causes = (data.cause || []).map(c => c.message || c.code || JSON.stringify(c)).join(' | ')
         console.error('[publish] causes:', JSON.stringify(data.cause, null, 2))
+        const missingCause = (data.cause || []).find(c =>
+          c.code === 'item.attributes.missing_required' || c.message?.includes('missing_required')
+        )
+        if (missingCause) {
+          const refs = missingCause.references || []
+          setMissingAttrIds(refs)
+          const names = refs.map(id => requiredAttrs.find(a => a.id === id)?.name || id)
+          throw new Error(`Atributos obligatorios faltantes: ${names.join(', ')}. Completa los campos resaltados.`)
+        }
+        const causes = (data.cause || []).map(c => c.message || c.code || JSON.stringify(c)).join(' | ')
         throw new Error(`${data.message}${causes ? ': ' + causes : ''}`)
       }
 
@@ -461,7 +477,7 @@ export default function App() {
   const reset = () => {
     setImg(null); setAnalysis(null); setCats([]); setSelCat(null)
     setResult(null); setErr(null); setRequiredAttrs([]); setAttrValues({})
-    setCommissions(null); setCompPrices(null)
+    setMissingAttrIds([]); setCommissions(null); setCompPrices(null)
     setScreen(S.CAMERA)
   }
 
@@ -739,18 +755,25 @@ export default function App() {
                   {requiredAttrs.map(attr => {
                     const val = attrValues[attr.id] || ''
                     const isEmpty = !val.toString().trim()
+                    const isMissing = isEmpty || missingAttrIds.includes(attr.id)
+                    const onChange = e => {
+                      setMissingAttrIds(ids => ids.filter(id => id !== attr.id))
+                      setAttrValues(v => ({ ...v, [attr.id]: e.target.value }))
+                    }
                     return (
                       <div key={attr.id} className="attr-item">
-                        <div className="attr-name">{attr.name}</div>
+                        <div className="attr-name" style={missingAttrIds.includes(attr.id) ? {color:'var(--r)'} : {}}>
+                          {attr.name}{missingAttrIds.includes(attr.id) ? ' ⚠ requerido' : ''}
+                        </div>
                         {attr.values?.length > 0 ? (
-                          <select className={`ei${isEmpty ? ' attr-missing' : ''}`}
-                            value={val} onChange={e => setAttrValues(v => ({ ...v, [attr.id]: e.target.value }))}>
+                          <select className={`ei${isMissing ? ' attr-missing' : ''}`}
+                            value={val} onChange={onChange}>
                             <option value="">— Seleccionar —</option>
                             {attr.values.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
                           </select>
                         ) : (
-                          <input className={`ei${isEmpty ? ' attr-missing' : ''}`}
-                            value={val} onChange={e => setAttrValues(v => ({ ...v, [attr.id]: e.target.value }))}
+                          <input className={`ei${isMissing ? ' attr-missing' : ''}`}
+                            value={val} onChange={onChange}
                             placeholder={`Ingresa ${attr.name.toLowerCase()}`} />
                         )}
                       </div>
