@@ -144,6 +144,14 @@ export default function App() {
   const [tokenDraft, setTokenDraft] = useState(() => LS.get('ml_token')        || '')
   const [anthKey,    setAnthKey]    = useState(() => LS.get('anthropic_key')   || '')
   const [anthDraft,  setAnthDraft]  = useState(() => LS.get('anthropic_key')   || '')
+  const [proxyUrl,   setProxyUrl]   = useState(() => LS.get('proxy_url')       || '')
+  const [proxyDraft, setProxyDraft] = useState(() => LS.get('proxy_url')       || '')
+
+  // ML API base: usa proxy para llamadas autenticadas si está configurado
+  const mlBase = useCallback((path) => {
+    if (proxyUrl) return `${proxyUrl.replace(/\/$/, '')}/ml${path}`
+    return `${ML}${path}`
+  }, [proxyUrl])
 
   const videoRef  = useRef(null)
   const canvasRef = useRef(null)
@@ -281,7 +289,7 @@ export default function App() {
         const form = new FormData()
         form.append('file', blob, 'product.jpg')
         console.log('[publish] Subiendo imagen...')
-        const pr = await fetch(`${ML}/pictures/items/upload`, {
+        const pr = await fetch(mlBase('/pictures/items/upload'), {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
           body: form
@@ -317,7 +325,7 @@ export default function App() {
       }
 
       console.log('[publish] POST /items payload:', payload)
-      const r    = await fetch(`${ML}/items`, {
+      const r    = await fetch(mlBase('/items'), {
         method:  'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body:    JSON.stringify(payload)
@@ -336,7 +344,7 @@ export default function App() {
       setErr('Error publicando: ' + e.message)
       setScreen(S.CONFIRM)
     }
-  }, [selCat, analysis, img, token])
+  }, [selCat, analysis, img, token, mlBase])
 
   const reset = () => {
     setImg(null); setAnalysis(null); setCats([])
@@ -394,8 +402,18 @@ export default function App() {
                   autoComplete="off"
                 />
               </div>
+              <hr />
+              <div className="f">
+                <label>Proxy URL <span style={{color:'var(--g)',fontSize:9}}>(requerido para publicar)</span></label>
+                <input
+                  value={proxyDraft}
+                  onChange={e => setProxyDraft(e.target.value)}
+                  placeholder="https://mlpu-proxy.TU-USUARIO.workers.dev"
+                  autoComplete="off"
+                />
+              </div>
               <div className="note">
-                Se guarda solo en tu navegador (<code>localStorage</code>). Nunca se sube a ningún servidor.
+                Las claves se guardan solo en tu navegador (<code>localStorage</code>). El proxy es necesario para publicar en MercadoLibre — ver instrucciones en el repo.
               </div>
             </div>
             <button
@@ -405,8 +423,10 @@ export default function App() {
                 LS.set('ml_app_id',     appId)
                 LS.set('ml_token',      tokenDraft)
                 LS.set('anthropic_key', anthDraft)
+                LS.set('proxy_url',     proxyDraft)
                 setToken(tokenDraft)
                 setAnthKey(anthDraft)
+                setProxyUrl(proxyDraft)
                 setScreen(S.CAMERA)
               }}
             >
