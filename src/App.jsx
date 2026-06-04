@@ -6,7 +6,6 @@ import CropScreen from './CropScreen.jsx'
 const ML = 'https://api.mercadolibre.com'
 const DEBUG = false
 const log = (...a) => { if (DEBUG) console.log(...a) }
-const TOKEN_TTL = 21600 // ML access tokens last 6 hours
 
 const S = {
   ONBOARDING: 'onboarding', CAMERA: 'camera', CROP: 'crop', PREVIEW: 'preview',
@@ -342,20 +341,13 @@ function PhotoStrip({ imgs, onReorder, onDelete, onAdd, showAdd = true }) {
 export default function App() {
   const [screen,      setScreen]      = useState(S.ONBOARDING)
   const [appId,       setAppId]       = useState(() => LS.get('ml_app_id')    || '3829359465845583')
-  const [token,       setToken]       = useState(() => LS.get('ml_token')      || '')
-  const [tokenDraft,  setTokenDraft]  = useState(() => LS.get('ml_token')      || '')
   const [anthKey,     setAnthKey]     = useState(() => LS.get('anthropic_key') || '')
   const [anthDraft,   setAnthDraft]   = useState(() => LS.get('anthropic_key') || '')
-  const [proxyUrl,    setProxyUrl]    = useState(() => LS.get('proxy_url')     || 'https://broad-pond-c45emlpup.aronricocl.workers.dev')
-  const [proxyDraft,  setProxyDraft]  = useState(() => LS.get('proxy_url')     || 'https://broad-pond-c45emlpup.aronricocl.workers.dev')
+  const [proxyUrl,    setProxyUrl]    = useState(() => LS.get('proxy_url')     || 'https://mlpu-proxy.aronricocl.workers.dev')
+  const [proxyDraft,  setProxyDraft]  = useState(() => LS.get('proxy_url')     || 'https://mlpu-proxy.aronricocl.workers.dev')
   const [soundOn,       setSoundOn]       = useState(() => LS.get('sound_on') !== 'false')
-  const [clientSecret,  setClientSecret]  = useState(() => LS.get('ml_client_secret') || '')
-  const [secretDraft,   setSecretDraft]   = useState(() => LS.get('ml_client_secret') || '')
-  const [refreshToken,  setRefreshToken]  = useState(() => LS.get('ml_refresh_token') || '')
-  const [rtkDraft,      setRtkDraft]      = useState(() => LS.get('ml_refresh_token') || '')
-  const [tokenObtainedAt, setTokenObtainedAt] = useState(() => Number(LS.get('token_obtained_at')) || null)
-  const [tokenTick,     setTokenTick]     = useState(0) // forces re-render for countdown
-  const [refreshing,    setRefreshing]    = useState(false)
+  // ── Sesión ML centralizada en el Worker (KV). El front ya no guarda tokens.
+  const [authStatus,   setAuthStatus]   = useState(null) // { active, secs_left, expires_at } | null
   const [authCode,      setAuthCode]      = useState('')
   const [exchanging,    setExchanging]    = useState(false)
   const [authErr,       setAuthErr]       = useState('')
@@ -367,106 +359,66 @@ export default function App() {
 
   const beep = useCallback((type = 'capture') => playBeep(type, soundOn), [soundOn])
 
-  // ── TOKEN COUNTDOWN
-  const tokenSecsLeft = tokenObtainedAt
-    ? Math.max(0, TOKEN_TTL - Math.floor((Date.now() - tokenObtainedAt) / 1000))
-    : null
+  // ── SESIÓN ML (gestionada por el Worker). El front solo consulta estado.
+  const sessionActive = !!authStatus?.active
+  const sessionSecsLeft = authStatus?.active ? (authStatus.secs_left ?? null) : null
   const fmtTokenTime = s => {
-    if (s === null) return null
+    if (s === null || s === undefined) return null
     if (s <= 0) return 'Expirado'
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60)
     return h > 0 ? `${h}h ${m}m` : `${m}m`
   }
-  const tokenColor = tokenSecsLeft === null ? null
-    : tokenSecsLeft <= 0 ? 'var(--r)'
-    : tokenSecsLeft < 1800 ? 'var(--r)'
-    : tokenSecsLeft < 7200 ? 'var(--y)'
+  const tokenColor = sessionSecsLeft === null ? null
+    : sessionSecsLeft <= 0 ? 'var(--r)'
+    : sessionSecsLeft < 1800 ? 'var(--r)'
+    : sessionSecsLeft < 7200 ? 'var(--y)'
     : 'var(--g)'
 
-  // ── AUTO-REFRESH TOKEN
-  const refreshAccessToken = useCallback(async (silent = false) => {
-    if (!refreshToken || !clientSecret) return false
-    setRefreshing(true)
+  // ── Consultar estado de sesión al Worker (KV)
+  const fetchAuthStatus = useCallback(async () => {
     try {
-      const body = new URLSearchParams({
-        grant_type:    'refresh_token',
-        client_id:     appId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken
-      })
-      const r = await fetch(mlBase('/oauth/token'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-        body: body.toString()
-      })
+      const r = await fetch(mlBase('/auth/status'), { headers: { Accept: 'application/json' } })
       const data = await r.json()
-      if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`)
-      const newToken   = data.access_token
-      const newRefresh = data.refresh_token || refreshToken
-      const now = Date.now()
-      setToken(newToken);       LS.set('ml_token', newToken)
-      setTokenDraft(newToken)
-      setRefreshToken(newRefresh); LS.set('ml_refresh_token', newRefresh)
-      setRtkDraft(newRefresh)
-      setTokenObtainedAt(now);  LS.set('token_obtained_at', String(now))
-      log('[token] renovado OK')
-      return true
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
+      setAuthStatus(data)
+      return data
     } catch (e) {
-      if (!silent) setErr('No se pudo renovar el token: ' + e.message)
-      return false
-    } finally {
-      setRefreshing(false)
+      log('[auth] status fail:', e.message)
+      setAuthStatus({ active: false, secs_left: 0 })
+      return null
     }
-  }, [refreshToken, clientSecret, appId, mlBase])
+  }, [mlBase])
 
-  // ── EXCHANGE AUTH CODE → tokens
-  const exchangeCode = useCallback(async () => {
-    if (!authCode.trim() || !secretDraft.trim() || !appId) return
+  // ── Sembrar sesión: enviar el código OAuth al Worker (que guarda en KV)
+  const initAuth = useCallback(async () => {
+    if (!authCode.trim()) return
     setExchanging(true); setAuthErr('')
     try {
-      // Accept full httpbin URL or bare code
+      // Acepta URL completa de httpbin o el código pelado.
       let code = authCode.trim()
       try { code = new URL(code).searchParams.get('code') || code } catch {}
-      const body = new URLSearchParams({
-        grant_type:   'authorization_code',
-        client_id:    appId,
-        client_secret: secretDraft.trim(),
-        code,
-        redirect_uri: 'https://httpbin.org/get'
-      })
-      const r = await fetch(mlBase('/oauth/token'), {
+      const r = await fetch(mlBase('/auth/init'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-        body: body.toString()
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ code, redirect_uri: 'https://httpbin.org/get' })
       })
       const data = await r.json()
-      if (!r.ok) throw new Error(data.message || data.error || `HTTP ${r.status}`)
-      const newToken   = data.access_token
-      const newRefresh = data.refresh_token
-      const now = Date.now()
-      // Persist everything
-      LS.set('ml_token', newToken);            setToken(newToken);          setTokenDraft(newToken)
-      LS.set('ml_refresh_token', newRefresh);  setRefreshToken(newRefresh); setRtkDraft(newRefresh)
-      LS.set('ml_client_secret', secretDraft); setClientSecret(secretDraft)
-      LS.set('token_obtained_at', String(now)); setTokenObtainedAt(now)
+      if (!r.ok || !data.ok) throw new Error(data.error || data.message || `HTTP ${r.status}`)
       setAuthCode('')
+      await fetchAuthStatus()
     } catch (e) {
-      setAuthErr('Error al canjear código: ' + e.message)
+      setAuthErr('Error al activar la sesión: ' + e.message)
     } finally {
       setExchanging(false)
     }
-  }, [authCode, secretDraft, appId, mlBase])
+  }, [authCode, mlBase, fetchAuthStatus])
 
-  // Countdown tick every 60s + auto-refresh when < 5 min left
+  // Estado inicial + poll cada 60s para reflejar la sesión del Worker.
   useEffect(() => {
-    const id = setInterval(() => {
-      setTokenTick(t => t + 1)
-      if (!tokenObtainedAt || !refreshToken || !clientSecret) return
-      const left = TOKEN_TTL - Math.floor((Date.now() - tokenObtainedAt) / 1000)
-      if (left < 300) refreshAccessToken(true)
-    }, 60_000)
+    fetchAuthStatus()
+    const id = setInterval(fetchAuthStatus, 60_000)
     return () => clearInterval(id)
-  }, [tokenObtainedAt, refreshToken, clientSecret, refreshAccessToken])
+  }, [fetchAuthStatus])
 
   const videoRef     = useRef(null)
   const canvasRef    = useRef(null)
@@ -691,8 +643,7 @@ export default function App() {
     ;(async () => {
       setLoadingAttrs(true)
       try {
-        const headers = token ? { Authorization: `Bearer ${token}` } : {}
-        const r = await fetch(mlBase(`/categories/${selCat.id}/attributes`), { headers })
+        const r = await fetch(mlBase(`/categories/${selCat.id}/attributes`))
         if (cancelled) return
         const data = await r.json()
         const needed = (Array.isArray(data) ? data : []).filter(a => a.tags?.required && !a.tags?.fixed)
@@ -723,7 +674,7 @@ export default function App() {
       } catch (e) { log('[comp-prices]', e.message) }
     })()
     return () => { cancelled = true }
-  }, [screen, selCat?.id, token, mlBase])
+  }, [screen, selCat?.id, mlBase])
 
   // ── COMMISSIONS debounced
   useEffect(() => {
@@ -735,7 +686,7 @@ export default function App() {
         const types = ['free', 'gold_special', 'gold_pro']
         const results = await Promise.allSettled(types.map(async type => {
           const url = mlBase(`/sites/MLC/listing_prices?price=${editPrice}&listing_type_id=${type}&category_id=${selCat.id}`)
-          const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+          const r = await fetch(url)
           if (!r.ok) return null
           const data = await r.json()
           const arr = Array.isArray(data) ? data : [data]
@@ -749,7 +700,7 @@ export default function App() {
       } catch (e) { log('[comm]', e.message); setCommissions(null) }
       finally { setLoadingComm(false) }
     }, 500)
-  }, [editPrice, listingType, screen, selCat?.id, token, mlBase])
+  }, [editPrice, listingType, screen, selCat?.id, mlBase])
 
   // ── PROFIT
   const currentFee     = commissions?.[listingType]?.fee || 0
@@ -776,7 +727,7 @@ export default function App() {
           const blob = await (await fetch(`data:image/jpeg;base64,${imgB64}`)).blob()
           const form = new FormData(); form.append('file', blob, 'product.jpg')
           const pr = await fetch(mlBase('/pictures/items/upload'), {
-            method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form
+            method: 'POST', body: form
           })
           if (pr.ok) { const pd = await pr.json(); pictures.push({ id: pd.id }) }
           else log('[publish] img fail:', pr.status)
@@ -808,7 +759,7 @@ export default function App() {
       }
       const r = await fetch(mlBase('/items'), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
       const data = await r.json()
@@ -835,7 +786,7 @@ export default function App() {
       } catch {}
       setResult(data); setCount(c => c + 1); beep('success'); setScreen(S.SUCCESS)
     } catch (e) { setErr('Error publicando: ' + e.message); setScreen(S.CONFIRM) }
-  }, [selCat, analysis, imgs, token, mlBase, editTitle, editPrice, editDesc, editCondition,
+  }, [selCat, analysis, imgs, mlBase, editTitle, editPrice, editDesc, editCondition,
       editQty, listingType, requiredAttrs, attrValues, freeShipping, localPickup,
       currentFee, shippingDeduct, productCost, beep])
 
@@ -908,7 +859,7 @@ export default function App() {
             const blob = await (await fetch(`data:image/jpeg;base64,${imgB64}`)).blob()
             const form = new FormData(); form.append('file', blob, 'product.jpg')
             const pr = await fetch(mlBase('/pictures/items/upload'), {
-              method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form
+              method: 'POST', body: form
             })
             if (pr.ok) { const pd = await pr.json(); pictures.push({ id: pd.id }) }
           } catch {}
@@ -938,7 +889,7 @@ export default function App() {
         }
         const r = await fetch(mlBase('/items'), {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         })
         const data = await r.json()
@@ -972,7 +923,7 @@ export default function App() {
     } else if (errors.length) {
       setErr('No se pudo publicar: ' + errors.join(' | '))
     }
-  }, [drafts, selectedDrafts, token, mlBase, beep])
+  }, [drafts, selectedDrafts, mlBase, beep])
 
   const reset = () => {
     setImgs([]); setAnalysis(null); setCats([]); setSelCat(null)
@@ -1004,10 +955,10 @@ export default function App() {
         <div className="top">
           <span className="logo">ML</span>
           <h1>Auto<em>Publisher</em></h1>
-          {fmtTokenTime(tokenSecsLeft) && (
-            <span className="cnt" style={{color: tokenColor, borderColor: tokenColor, cursor: refreshToken && clientSecret ? 'pointer' : 'default'}}
-              onClick={() => refreshToken && clientSecret && refreshAccessToken()}>
-              {refreshing ? '⟳' : '🔑'} {fmtTokenTime(tokenSecsLeft)}
+          {sessionActive && fmtTokenTime(sessionSecsLeft) && (
+            <span className="cnt" style={{color: tokenColor, borderColor: tokenColor, cursor: 'pointer'}}
+              onClick={fetchAuthStatus}>
+              🔑 {fmtTokenTime(sessionSecsLeft)}
             </span>
           )}
           {count > 0 && <span className="cnt">{count} publicados</span>}
@@ -1016,39 +967,39 @@ export default function App() {
         {/* ── ONBOARDING ── */}
         {screen === S.ONBOARDING && (
           <>
-            {/* ── Bloque ML OAuth ── */}
+            {/* ── Bloque ML OAuth (sesión centralizada en el Worker) ── */}
             <div className="card">
               <h2>MercadoLibre</h2>
+              {sessionActive ? (
+                <div className="ok-msg"><span>✓</span><span>
+                  Sesión ML activa y compartida (gestionada por el Worker).
+                  {fmtTokenTime(sessionSecsLeft) && ` Renueva en ${fmtTokenTime(sessionSecsLeft)}.`}
+                  {' '}La renovación es automática para todos los celulares.
+                </span></div>
+              ) : (
+                <div className="warn">No hay sesión ML activa. Autoriza una vez para sembrarla en el Worker.</div>
+              )}
               <div className="f"><label>App ID</label>
                 <input value={appId} onChange={e => setAppId(e.target.value)} placeholder="3829359465845583" /></div>
-              <div className="f"><label>Client Secret</label>
-                <input type="password" value={secretDraft} onChange={e => setSecretDraft(e.target.value)} placeholder="Tu client_secret" autoComplete="off" /></div>
+              <div className="note">El <code>client_secret</code> ahora vive en el Worker (Cloudflare secret), no en el celular.</div>
               <hr />
               {/* Paso 1: abrir URL de autorización */}
               <button className="btn btn-d" style={{width:'100%'}}
-                disabled={!appId || !secretDraft}
+                disabled={!appId}
                 onClick={() => window.open(`https://auth.mercadolibre.cl/authorization?response_type=code&client_id=${appId}&redirect_uri=https://httpbin.org/get`, '_blank', 'noopener')}>
                 🔐 Paso 1 — Autorizar en MercadoLibre
               </button>
-              {/* Paso 2: pegar URL de httpbin y canjear */}
+              {/* Paso 2: pegar URL de httpbin → el Worker hace el exchange */}
               <div className="f">
                 <label>Paso 2 — Pega la URL de httpbin que te redirigió</label>
                 <input value={authCode} onChange={e => { setAuthCode(e.target.value); setAuthErr('') }}
                   placeholder="https://httpbin.org/get?code=TG-..." autoComplete="off" />
               </div>
-              <button className="btn btn-y" disabled={!authCode.trim() || !secretDraft.trim() || exchanging}
-                onClick={exchangeCode}>
-                {exchanging ? '⟳ Canjeando…' : '✓ Canjear código y guardar tokens'}
+              <button className="btn btn-y" disabled={!authCode.trim() || exchanging}
+                onClick={initAuth}>
+                {exchanging ? '⟳ Activando…' : '✓ Activar sesión en el Worker'}
               </button>
               {authErr && <div className="err"><span>⚠</span><span>{authErr}</span></div>}
-              {/* Estado actual del token */}
-              {tokenDraft && (
-                <div className="note" style={{borderColor: tokenColor || 'var(--brd)'}}>
-                  🔑 Token: <code style={{color: tokenColor || 'var(--g)'}}>{tokenDraft.slice(0, 20)}…</code>
-                  {fmtTokenTime(tokenSecsLeft) && <span style={{color: tokenColor}}> · {fmtTokenTime(tokenSecsLeft)} restantes</span>}
-                  {refreshToken && <span style={{color:'var(--g)'}}> · auto-renovación activa ✓</span>}
-                </div>
-              )}
             </div>
 
             {/* ── Anthropic + Proxy ── */}
@@ -1068,7 +1019,7 @@ export default function App() {
               </div>
             </div>
 
-            {tokenDraft && anthDraft && appId && (
+            {sessionActive && anthDraft && appId && (
               <button className="btn btn-y" style={{width:'100%',fontSize:15,fontWeight:700}}
                 onClick={() => setScreen(S.CAMERA)}>
                 ▶ Continuar sin cambios
@@ -1078,11 +1029,10 @@ export default function App() {
               <button className="btn btn-d btn-sm" style={{flex:'none',padding:'13px 16px'}}
                 onClick={() => { setHistorial(loadHistory()); setScreen(S.HISTORY) }}>📋 Historial</button>
               <button className="btn btn-y" style={{flex:1}}
-                disabled={!appId || !tokenDraft || !anthDraft}
+                disabled={!appId || !sessionActive || !anthDraft}
                 onClick={() => {
                   LS.set('ml_app_id', appId); LS.set('anthropic_key', anthDraft); LS.set('proxy_url', proxyDraft)
-                  LS.set('ml_client_secret', secretDraft)
-                  setAnthKey(anthDraft); setProxyUrl(proxyDraft); setClientSecret(secretDraft)
+                  setAnthKey(anthDraft); setProxyUrl(proxyDraft)
                   setScreen(S.CAMERA)
                 }}>Guardar y comenzar →</button>
             </div>

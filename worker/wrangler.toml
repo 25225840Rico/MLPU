@@ -1,3 +1,14 @@
 name = "mlpu-proxy"
 main = "index.js"
 compatibility_date = "2024-01-01"
+
+# KV: almacena la sesión OAuth de ML (access_token + refresh_token).
+# Crear con:  wrangler kv namespace create ML_TOKENS
+# y pegar el id devuelto abajo.
+[[kv_namespaces]]
+binding = "ML_TOKENS"
+id = "1f6324c3659d4388bec284825c2864be"
+
+# Secrets (NO van aquí, configurar con):
+#   wrangler secret put ML_CLIENT_ID
+#   wrangler secret put ML_CLIENT_SECRET
