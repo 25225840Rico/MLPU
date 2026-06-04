@@ -607,7 +607,7 @@ export default function App() {
       const found = [], seen = new Set()
       for (const q of (a.categorySearches || []).slice(0, 3)) {
         try {
-          const res  = await fetch(`${ML}/sites/MLC/domain_discovery/search?q=${encodeURIComponent(q)}`)
+          const res  = await fetch(mlBase(`/sites/MLC/domain_discovery/search?q=${encodeURIComponent(q)}`))
           const data = await res.json()
           const items = Array.isArray(data) ? data : [data]
           for (const c of items.slice(0, 2)) {
@@ -624,7 +624,7 @@ export default function App() {
       beep('capture')
       setScreen(S.CATEGORIES)
     } catch (e) { setErr('Error IA: ' + e.message); setScreen(S.PREVIEW) }
-  }, [imgs, anthKey, beep])
+  }, [imgs, anthKey, mlBase, beep])
 
   // ── SELECT CATEGORY
   const selectCategory = useCallback(cat => {
