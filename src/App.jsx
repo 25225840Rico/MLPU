@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { analyzeProduct, fillAttributesWithAI } from './agents/orchestrator.js'
+import FullscreenCamera from './FullscreenCamera.jsx'
 
 const ML = 'https://api.mercadolibre.com'
 const DEBUG = false
@@ -451,6 +452,7 @@ export default function App() {
   const autoCaptured = useRef(false)
   const captureRef   = useRef(null) // stable ref to latest capture fn
 
+  const [showFsCam,   setShowFsCam]   = useState(false)
   const [stream,      setStream]      = useState(null)
   const [imgs,        setImgs]        = useState([])
   const [analysis,    setAnalysis]    = useState(null)
@@ -576,6 +578,13 @@ export default function App() {
   const onReorderImg = useCallback(i => setImgs(prev => [prev[i], ...prev.filter((_, j) => j !== i)]), [])
   const onDeleteImg  = useCallback(i => setImgs(prev => prev.filter((_, j) => j !== i)), [])
   const onAddPhoto   = useCallback(() => fileRef.current?.click(), [])
+
+  const onFsPhotoCaptured = useCallback((dataURL) => {
+    const b64 = dataURL.split(',')[1]
+    setImgs(prev => { const slots = 8 - prev.length; return slots > 0 ? [...prev, b64] : prev })
+    setShowFsCam(false)
+    setScreen(S.PREVIEW)
+  }, [])
 
   // ── AUTO-CAPTURE sharpness loop
   useEffect(() => {
@@ -1068,7 +1077,7 @@ export default function App() {
               {!stream ? (
                 <>
                   <div className="row" style={{width:'100%'}}>
-                    <button className="btn btn-d" onClick={startCam}>📷 Cámara</button>
+                    <button className="btn btn-d" onClick={() => setShowFsCam(true)}>📷 Cámara</button>
                     <button className="btn btn-d" onClick={() => fileRef.current?.click()}>📁 Archivo</button>
                     <input ref={fileRef} type="file" accept="image/*" multiple style={{display:'none'}} onChange={e => handleFiles(e.target.files)} />
                   </div>
@@ -1502,6 +1511,13 @@ export default function App() {
         )}
 
       </div>
+
+      {showFsCam && (
+        <FullscreenCamera
+          onPhotoCaptured={onFsPhotoCaptured}
+          onClose={() => setShowFsCam(false)}
+        />
+      )}
     </>
   )
 }
