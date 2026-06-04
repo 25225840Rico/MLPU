@@ -65,7 +65,7 @@ export async function analyzeProduct(imageB64, apiKey) {
 
   const [vision, seo, price, category] = await Promise.all([
     ask('Vision',
-      'Eres experto en productos. Mira la imagen. Identifica: tipo exacto, marca, modelo, estado físico, 3-4 características.\nResponde SOLO JSON:\n{"product":"nombre específico","brand":"marca o null","model":"modelo o null","condition":"new o used","features":["f1","f2","f3"],"description":"2 oraciones: materiales, estado, uso"}',
+      'Eres experto en productos. Mira la imagen. Identifica: tipo exacto, marca, modelo, estado físico, 3-4 características.\nResponde SOLO JSON:\n{"product":"nombre específico","brand":"marca o null","model":"modelo o null","condition":"new o used","features":["f1","f2","f3"],"description":"OBLIGATORIO. Escribe 2-3 oraciones describiendo el producto: materiales, estado de conservación, características principales. Ej: Zapatillas Nike Air Max en buen estado, sin desgaste visible en suela. Talla 42, color blanco con detalles negros."}',
       compressed, apiKey),
     ask('SEO',
       'Eres SEO expert MercadoLibre Chile. Mira la imagen. Título: marca + tipo + característica. Máx 60 chars. Sin "Vendo".\nResponde SOLO JSON: {"title":"título"}',
@@ -84,7 +84,9 @@ export async function analyzeProduct(imageB64, apiKey) {
     model:            vision.model      || null,
     condition:        vision.condition  || 'used',
     features:         vision.features   || [],
-    description:      vision.description || '',
+    description:      vision.description ||
+                      [vision.product, vision.brand, vision.model, vision.condition]
+                        .filter(Boolean).join(' · ') || '',
     title:            seo.title         || vision.product || 'Producto',
     price:            Number(price.price) || 10000,
     categorySearches: category.searches || []

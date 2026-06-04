@@ -477,6 +477,11 @@ export default function App() {
   // ── ANALYZING progress
   const [analysisDone,   setAnalysisDone]   = useState(false)
 
+  // ── AUTO MODE
+  const [autoMode,   setAutoMode]   = useState(false)
+  const [autoCount,  setAutoCount]  = useState(0)
+  const [autoStatus, setAutoStatus] = useState('')
+
   // ── PUBLISHING progress
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 1 })
 
@@ -653,6 +658,99 @@ export default function App() {
       beep('capture')
       setScreen(S.CATEGORIES)
     } catch (e) { setErr('Error IA: ' + e.message); setScreen(S.PREVIEW) }
+  }, [imgs, anthKey, beep])
+
+  // ── AUTO FLOW (modo automático: recorta → analiza → guarda borrador → vuelve a CAMERA)
+  const runAutoFlow = useCallback(async (overrideImgs) => {
+    const currentImgs = overrideImgs || imgs
+    if (!currentImgs.length) return
+    setErr(null)
+    setAutoStatus('Recortando…')
+    // auto-crop a 1:1 sobre la foto principal
+    const cropped = await cropSquareForML(currentImgs[0])
+    const croppedImgs = [cropped, ...currentImgs.slice(1)]
+    setImgs(croppedImgs)
+
+    setAutoStatus('Analizando con IA…')
+    setAnalysisDone(false)
+    try {
+      const a = await analyzeProduct(cropped, anthKey)
+      setAnalysis(a)
+      setAnalysisDone(true)
+
+      // buscar categorías
+      const found = [], seen = new Set()
+      for (const q of (a.categorySearches || []).slice(0, 3)) {
+        try {
+          const res  = await fetch(`https://api.mercadolibre.com/sites/MLC/domain_discovery/search?q=${encodeURIComponent(q)}`)
+          const data = await res.json()
+          const items = Array.isArray(data) ? data : [data]
+          for (const c of items.slice(0, 2)) {
+            if (c?.category_id && !seen.has(c.category_id)) {
+              seen.add(c.category_id)
+              found.push({ id: c.category_id, name: c.category_name || q })
+            }
+          }
+        } catch (_) {}
+      }
+
+      const bestCat = found.find(c => c.id) || null
+      if (!bestCat) setAutoStatus('⚠ Sin categoría — guardando sin cat.')
+
+      // setear estados como haría selectCategory
+      setSelCat(bestCat)
+      setEditTitle(a.title || '')
+      setEditPrice(a.price || 0)
+      setEditDesc(a.description || '')
+      setEditCondition(a.condition || 'used')
+      setEditQty(3)
+      setListingType('free')
+      setRequiredAttrs([])
+      setAttrValues({})
+      setMissingAttrIds([])
+      setCommissions(null)
+      setCompPrices(null)
+      setFreeShipping(false)
+      setLocalPickup(false)
+
+      setAutoStatus('Guardando borrador…')
+      try {
+        const thumb = await compressToThumb(cropped)
+        const compImgs = await Promise.all(croppedImgs.map(i => compressForDraft(i)))
+        const id = genId()
+        saveDraft({
+          id, created: new Date().toISOString(),
+          thumb, imgs: compImgs,
+          analysis: a, selCat: bestCat,
+          editTitle: a.title || '', editPrice: a.price || 0,
+          editDesc: a.description || '', editCondition: a.condition || 'used',
+          editQty: 3, listingType: 'free',
+          attrValues: {}, requiredAttrs: [],
+          freeShipping: false, localPickup: false,
+          shippingCost: 3000, productCost: 0
+        })
+        setDrafts(loadDrafts())
+        setAutoCount(c => c + 1)
+        beep('capture')
+        setAutoStatus('✓ Guardado')
+      } catch (e) {
+        setAutoStatus('Error guardando: ' + e.message)
+      }
+
+      // limpiar y volver a CAMERA listo para el siguiente
+      setTimeout(() => {
+        setImgs([])
+        setAnalysis(null)
+        setSelCat(null)
+        setAutoStatus('')
+        setScreen(S.CAMERA)
+      }, 1200)
+
+    } catch (e) {
+      setAutoStatus('Error IA: ' + e.message)
+      setTimeout(() => setAutoStatus(''), 3000)
+      setScreen(S.CAMERA)
+    }
   }, [imgs, anthKey, beep])
 
   // ── SELECT CATEGORY
@@ -1124,6 +1222,44 @@ export default function App() {
                     <button className="btn btn-d" onClick={() => fileRef.current?.click()}>📁 Archivo</button>
                     <input ref={fileRef} type="file" accept="image/*" multiple style={{display:'none'}} onChange={e => handleFiles(e.target.files)} />
                   </div>
+
+                  {/* toggle modo automático */}
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+                    width:'100%',
+                    background: autoMode ? 'var(--y)' : 'var(--s2)',
+                    border:'1px solid var(--brd)',borderRadius:12,padding:'10px 14px',marginBottom:8}}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:700,color: autoMode ? '#000' : 'var(--txt)'}}>
+                        ⚡ Modo Automático
+                      </div>
+                      <div style={{fontSize:11,color: autoMode ? 'rgba(0,0,0,0.6)' : 'var(--dim)'}}>
+                        {autoMode
+                          ? autoCount > 0 ? `${autoCount} guardado${autoCount>1?'s':''} — sigue capturando` : 'Captura → analiza → guarda solo'
+                          : 'Activa para publicar en lote'}
+                      </div>
+                    </div>
+                    <button
+                      className={`toggle${autoMode ? ' on' : ''}`}
+                      role="switch"
+                      aria-checked={autoMode}
+                      aria-label="Modo automático"
+                      onClick={() => { setAutoMode(m => !m); if (autoMode) setAutoCount(0) }}
+                    />
+                  </div>
+
+                  {autoStatus && (
+                    <div style={{fontSize:12,color:'var(--dim)',textAlign:'center',padding:'4px 0'}}>
+                      {autoStatus}
+                    </div>
+                  )}
+
+                  {autoMode && autoCount > 0 && (
+                    <button className="btn btn-y" style={{width:'100%'}}
+                      onClick={() => { setAutoMode(false); setAutoCount(0); setScreen(S.DRAFTS) }}>
+                      📋 Ver borradores ({autoCount}) →
+                    </button>
+                  )}
+
                   {imgs.length > 0 && (
                     <button className="btn btn-y" onClick={analyze}>
                       ⚡ Analizar con IA ({imgs.length} foto{imgs.length > 1 ? 's' : ''})
@@ -1163,8 +1299,24 @@ export default function App() {
         {screen === S.CROP && imgs.length > 0 && (
           <CropScreen
             imgB64={imgs[0]}
-            onCrop={croppedB64 => { setImgs(prev => [croppedB64, ...prev.slice(1)]); setScreen(S.PREVIEW) }}
-            onSkip={() => setScreen(S.PREVIEW)}
+            onCrop={croppedB64 => {
+              const newImgs = [croppedB64, ...imgs.slice(1)]
+              setImgs(newImgs)
+              if (autoMode) {
+                setScreen(S.ANALYZING)
+                setTimeout(() => runAutoFlow(newImgs), 0)
+              } else {
+                setScreen(S.PREVIEW)
+              }
+            }}
+            onSkip={() => {
+              if (autoMode) {
+                setScreen(S.ANALYZING)
+                setTimeout(() => runAutoFlow(imgs), 0)
+              } else {
+                setScreen(S.PREVIEW)
+              }
+            }}
           />
         )}
 
