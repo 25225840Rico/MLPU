@@ -1,0 +1,63 @@
+HANDOFF — ML AutoPublisher
+Fecha: 2026-06-04
+HEAD: f4793cc
+App: https://25225840rico.github.io/MLPU/
+Worker: https://mlpu-proxy.aronricocl.workers.dev
+Repo: https://github.com/25225840Rico/MLPU
+
+=== OBJETIVO DEL PROYECTO ===
+App móvil React+Vite para publicar productos en MercadoLibre Chile.
+Dos usuarios (dueño + esposa Paola) publican en la misma cuenta ML.
+Token OAuth centralizado en Cloudflare Worker KV.
+
+=== ESTADO ACTUAL ===
+Sistema completo y en producción. Todos los bugs críticos corregidos.
+Último deploy: Worker f4793cc + frontend f4793cc en GitHub Pages.
+
+=== ÚLTIMO PASO COMPLETADO ===
+Commit f4793cc: reglas oficiales ML implementadas
+- Descripción en 2 pasos: POST /items sin description, luego POST /items/{id}/description
+- cleanTitle(): limpia títulos (sin símbolos, sin palabras prohibidas ML)
+- Descripción persuasiva: estructura gancho+beneficios+specs+CTA, sin HTML
+- Score de calidad en SUCCESS: GET /items/{id}/performance a los 3s
+- Hints de fotos en CAMERA (fondo blanco, 1200px, ángulos)
+
+=== PRÓXIMO PASO EXACTO ===
+El usuario necesita:
+1. Abrir la app en su celular: https://25225840rico.github.io/MLPU/
+2. Ir a Config (⚙) → ONBOARDING
+3. Paso 1: tocar "Autorizar en MercadoLibre" → completar OAuth en ML
+4. Paso 2: pegar la URL de httpbin con el código → "Activar sesión en el Worker"
+5. Esto siembra el token en el KV del Worker (SOLO hay que hacerlo UNA vez)
+6. Luego pasar el link a Paola → ella entra directo (sesión compartida)
+7. Probar modo automático: toggle ⚡ en cámara → capturar varios productos → publicar lote
+
+Si el usuario reporta bugs, los más probables son:
+- Token no sembrado → ver ONBOARDING paso 1+2
+- Score de calidad no aparece → endpoint /performance puede tardar o no existir en algunas categorías (falla silenciosa, OK)
+- Descripción vacía → fallback activo desde f4793cc
+
+=== ARCHIVOS CLAVE ===
+src/App.jsx          — UI completa (~1700 líneas), publish(), publishBatch(), todos los screens
+src/agents/orchestrator.js — analyzeProduct, fillAttributesWithAI, cleanTitle
+src/CropScreen.jsx   — recortador canvas 1:1
+worker/index.js      — Cloudflare Worker: proxy OAuth, KV token, endpoints auth
+worker/wrangler.toml — config Worker: KV binding ML_TOKENS id=1f6324c3659d4388bec284825c2864be
+
+=== INFRAESTRUCTURA ===
+KV namespace: ML_TOKENS (id: 1f6324c3659d4388bec284825c2864be)
+Secrets en Cloudflare: ML_CLIENT_ID=3829359465845583, ML_CLIENT_SECRET (configurado)
+GitHub Pages: rama main, carpeta dist/ generada por vite build
+
+=== CÓMO RETOMAR ===
+1. cd "C:\Users\aronr\OneDrive\Escritorio\automl"
+2. Leer este HANDOFF.txt
+3. git log --oneline -5 para ver el estado del repo
+4. Si hay cambios pendientes: npx vite build && git add . && git commit -m "..." && git push origin main
+5. Si hay cambios en worker/: cd worker && npx wrangler deploy
+
+=== DIFERIDOS (no urgentes) ===
+- PERF-02: refactor imgsDisplay/imgsUpload (mayor)
+- UX-02: modal confirmación Config con fotos activas
+- redirect_uri httpbin.org → URL propia del usuario
+- ONBOARDING simplificado para usuarios finales

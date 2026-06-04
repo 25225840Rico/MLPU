@@ -1,0 +1,23 @@
+{
+  "phase": "production-stable",
+  "status": "handoff",
+  "last_session": "2026-06-04T00:00:00Z",
+  "last_commit": "f4793cc",
+  "next_step": "Usuario: ONBOARDING Paso1+2 para sembrar KV, luego probar modo automático y publicación real",
+  "open_tasks": [
+    "Sembrar sesión ML en KV (ONBOARDING una vez desde celular)",
+    "Probar modo automático batch end-to-end",
+    "Verificar score calidad en SUCCESS tras publicación real"
+  ],
+  "blockers": [],
+  "deferred": [
+    "PERF-02: separar imgsDisplay/imgsUpload",
+    "UX-02: modal confirmación Config con fotos activas",
+    "redirect_uri httpbin → URL propia",
+    "ONBOARDING simplificado"
+  ],
+  "worker_url": "https://mlpu-proxy.aronricocl.workers.dev",
+  "kv_id": "1f6324c3659d4388bec284825c2864be",
+  "repo": "https://github.com/25225840Rico/MLPU",
+  "app_url": "https://25225840rico.github.io/MLPU/"
+}
