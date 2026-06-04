@@ -1077,6 +1077,14 @@ export default function App() {
                 ▶ Continuar sin cambios
               </button>
             )}
+            <button className="btn btn-d" style={{width:'100%',fontSize:13}}
+              onClick={() => {
+                const url = 'https://25225840rico.github.io/MLPU/'
+                if (navigator.share) navigator.share({ title: 'ML AutoPublisher', url })
+                else navigator.clipboard.writeText(url).then(() => setErr('✓ Link copiado para Paola 💕'))
+              }}>
+              💕 Copiar link para Paola
+            </button>
             <div className="row">
               <button className="btn btn-d btn-sm" style={{flex:'none',padding:'13px 16px'}}
                 onClick={() => { setHistorial(loadHistory()); setScreen(S.HISTORY) }}>📋 Historial</button>
