@@ -1,6 +1,16 @@
 const DEBUG = false
 const log = (...a) => { if (DEBUG) console.log(...a) }
 
+// Validador de título SEO según reglas oficiales de MercadoLibre
+function cleanTitle(title, maxLen = 60) {
+  return (title || '')
+    .replace(/[^a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]/g, ' ') // sin símbolos ni puntuación
+    .replace(/\b(envío gratis|cuotas|descuento|full|stock|nuevo|usado|reacondicionado)\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, maxLen)
+}
+
 export async function compressImage(b64, maxW = 1024, quality = 0.82) {
   return new Promise(resolve => {
     const img = new Image()
@@ -36,7 +46,7 @@ async function ask(agentName, system, imageB64, apiKey) {
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 500,
+      max_tokens: 1024,
       system,
       messages: [{ role: 'user', content }]
     })
@@ -65,10 +75,41 @@ export async function analyzeProduct(imageB64, apiKey) {
 
   const [vision, seo, price, category] = await Promise.all([
     ask('Vision',
-      'Eres experto en productos. Mira la imagen. Identifica: tipo exacto, marca, modelo, estado físico, 3-4 características.\nResponde SOLO JSON:\n{"product":"nombre específico","brand":"marca o null","model":"modelo o null","condition":"new o used","features":["f1","f2","f3"],"description":"OBLIGATORIO. Escribe 2-3 oraciones describiendo el producto: materiales, estado de conservación, características principales. Ej: Zapatillas Nike Air Max en buen estado, sin desgaste visible en suela. Talla 42, color blanco con detalles negros."}',
+      `Eres experto en productos y copywriting para MercadoLibre Chile. Mira la imagen. Identifica: tipo exacto, marca, modelo, estado físico, 3-4 características.
+
+Para el campo "description" genera una descripción en TEXTO PLANO (SIN HTML) siguiendo esta estructura:
+
+ESTRUCTURA OBLIGATORIA:
+1. Primera línea: gancho con marca+modelo+tipo + beneficio principal (con keywords SEO)
+2. BENEFICIOS CLAVE\\n✓ [beneficio 1]\\n✓ [beneficio 2]\\n✓ [beneficio 3]
+3. ESPECIFICACIONES\\n▪ [spec 1]\\n▪ [spec 2]
+4. Una línea de confianza/garantía
+5. Cierre con llamado a la acción
+
+REGLAS:
+- Solo texto plano + emojis moderados: ✅ ⚡ 📦 🛡️ ⭐
+- Separadores: ━━━━━━━━
+- Viñetas: ✓ ▪
+- 150-400 palabras
+- Keywords principales en las primeras 2 líneas
+- NO tags HTML (< >)
+- NO mencionar envío gratis ni garantía a menos que el producto lo incluya
+- NO keyword stuffing
+
+Responde SOLO JSON:
+{"product":"nombre específico","brand":"marca o null","model":"modelo o null","condition":"new o used","features":["f1","f2","f3"],"description":"descripción persuasiva en texto plano según la estructura"}`,
       compressed, apiKey),
     ask('SEO',
-      'Eres SEO expert MercadoLibre Chile. Mira la imagen. Título: marca + tipo + característica. Máx 60 chars. Sin "Vendo".\nResponde SOLO JSON: {"title":"título"}',
+      `Eres SEO expert MercadoLibre Chile. Mira la imagen y genera el título.
+
+REGLAS DURAS DE TÍTULO MERCADOLIBRE:
+- Formato: PRODUCTO + MARCA + MODELO + especificaciones clave
+- Sin símbolos ni puntuación (solo palabras y números)
+- Sin mencionar: envío gratis, cuotas, descuentos, FULL, stock, nuevo, usado
+- Sin errores ortográficos, sin repeticiones
+- Máximo 60 caracteres
+
+Responde SOLO JSON: {"title":"título"}`,
       compressed, apiKey),
     ask('Precio',
       'Eres experto en precios Chile. Mira la imagen. Estima precio justo en CLP para MercadoLibre según marca, tipo, estado.\nResponde SOLO JSON: {"price":15000}',
@@ -78,16 +119,20 @@ export async function analyzeProduct(imageB64, apiKey) {
       compressed, apiKey)
   ])
 
+  const rawDesc = vision.description ||
+                  [vision.product, vision.brand, vision.model, vision.condition]
+                    .filter(Boolean).join(' · ') || ''
+  // limpiar tags HTML si la IA los devolvió
+  const description = rawDesc.replace(/<[^>]*>/g, '').trim()
+
   const result = {
     product:          vision.product    || 'Producto',
     brand:            vision.brand      || null,
     model:            vision.model      || null,
     condition:        vision.condition  || 'used',
     features:         vision.features   || [],
-    description:      vision.description ||
-                      [vision.product, vision.brand, vision.model, vision.condition]
-                        .filter(Boolean).join(' · ') || '',
-    title:            seo.title         || vision.product || 'Producto',
+    description,
+    title:            cleanTitle(seo.title || vision.product || 'Producto'),
     price:            Number(price.price) || 10000,
     categorySearches: category.searches || []
   }

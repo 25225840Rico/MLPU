@@ -487,6 +487,7 @@ export default function App() {
 
   // ── SUCCESS: feedback al copiar link
   const [linkCopied, setLinkCopied] = useState(false)
+  const [perfScore,  setPerfScore]  = useState(null)
   const copyPermalink = useCallback(async (url) => {
     if (!url) return
     try {
@@ -880,7 +881,6 @@ export default function App() {
         buying_mode:        'buy_it_now',
         condition:          editCondition,
         listing_type_id:    listingType,
-        description:        { plain_text: editDesc || editTitle },
         ...(pictures.length  && { pictures }),
         ...(attributes.length && { attributes }),
         shipping: freeShipping
@@ -908,6 +908,18 @@ export default function App() {
         }
         const causes = (data.cause || []).map(c => c.message || c.code || JSON.stringify(c)).join(' | ')
         throw new Error(`${data.message}${causes ? ': ' + causes : ''}`)
+      }
+      // PASO B: descripción (endpoint separado desde 2021)
+      if (editDesc?.trim()) {
+        try {
+          await fetch(mlBase(`/items/${data.id}/description`), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ plain_text: editDesc.trim() })
+          })
+        } catch (_) {
+          // descripción falló pero el ítem ya existe — no bloquear
+        }
       }
       // Save history (in separate try/catch so thumbnail failure doesn't block save)
       try {
@@ -1016,7 +1028,6 @@ export default function App() {
           buying_mode: 'buy_it_now',
           condition: draft.editCondition || 'used',
           listing_type_id: draft.listingType || 'free',
-          description: { plain_text: draft.editDesc || draft.editTitle || '' },
           ...(pictures.length && { pictures }),
           ...(attributes.length && { attributes }),
           shipping: draft.freeShipping
@@ -1034,6 +1045,19 @@ export default function App() {
         })
         const data = await r.json()
         if (!r.ok) throw new Error(data.message || 'Error')
+        // PASO B: descripción (endpoint separado desde 2021)
+        const batchDesc = draft.editDesc || draft.editTitle || ''
+        if (batchDesc.trim()) {
+          try {
+            await fetch(mlBase(`/items/${data.id}/description`), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ plain_text: batchDesc.trim() })
+            })
+          } catch (_) {
+            // descripción falló pero el ítem ya existe — no bloquear
+          }
+        }
         // guardar en historial
         try {
           const thumb = await compressToThumb(draft.imgs?.[0] || '')
@@ -1064,6 +1088,22 @@ export default function App() {
       setErr('No se pudo publicar: ' + errors.join(' | '))
     }
   }, [drafts, selectedDrafts, mlBase, beep])
+
+  // Score de calidad de la publicación (endpoint performance de ML)
+  useEffect(() => {
+    if (screen !== S.SUCCESS || !result?.id) return
+    setPerfScore(null)
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(mlBase(`/items/${result.id}/performance`))
+        if (r.ok) {
+          const d = await r.json()
+          if (d?.score != null) setPerfScore(d)
+        }
+      } catch (_) {}
+    }, 3000) // esperar 3s para que ML lo procese
+    return () => clearTimeout(timer)
+  }, [screen, result?.id, mlBase])
 
   const reset = () => {
     setImgs([]); setAnalysis(null); setCats([]); setSelCat(null)
@@ -1222,6 +1262,17 @@ export default function App() {
                     <button className="btn btn-d" onClick={() => fileRef.current?.click()}>📁 Archivo</button>
                     <input ref={fileRef} type="file" accept="image/*" multiple style={{display:'none'}} onChange={e => handleFiles(e.target.files)} />
                   </div>
+
+                  {imgs.length === 0 && (
+                    <div style={{fontSize:11,color:'var(--dim)',lineHeight:1.7,
+                      padding:'8px 12px',background:'var(--card)',borderRadius:10,
+                      border:'1px solid var(--brd)'}}>
+                      📸 <strong>Tips para mejor ranking:</strong><br/>
+                      ✓ Primera foto: fondo blanco, sin texto ni marcas<br/>
+                      ✓ Mínimo 1200×1200 px<br/>
+                      ✓ Fotos siguientes: ángulos, empaque, en uso
+                    </div>
+                  )}
 
                   {/* toggle modo automático */}
                   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
@@ -1620,6 +1671,20 @@ export default function App() {
                     onClick={() => window.open(result.permalink, '_blank', 'noopener')}>
                     🔗 Abrir
                   </button>
+                </div>
+              )}
+              {perfScore && (
+                <div style={{background:'var(--card)',borderRadius:12,padding:'12px 14px',
+                  border:'1px solid var(--brd)',marginTop:8}}>
+                  <div style={{fontSize:12,fontWeight:700,marginBottom:6}}>
+                    📊 Calidad: {perfScore.score}/100
+                    {perfScore.level && ` — ${perfScore.level}`}
+                  </div>
+                  {(perfScore.buckets || []).filter(b => b.status === 'PENDING').slice(0,3).map((b,i) => (
+                    <div key={i} style={{fontSize:11,color:'var(--dim)',marginTop:3}}>
+                      ▪ {b.name || b.id}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
