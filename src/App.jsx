@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { analyzeProduct, fillAttributesWithAI } from './agents/orchestrator.js'
 import FullscreenCamera from './FullscreenCamera.jsx'
+import CropScreen from './CropScreen.jsx'
 
 const ML = 'https://api.mercadolibre.com'
 const DEBUG = false
@@ -8,7 +9,7 @@ const log = (...a) => { if (DEBUG) console.log(...a) }
 const TOKEN_TTL = 21600 // ML access tokens last 6 hours
 
 const S = {
-  ONBOARDING: 'onboarding', CAMERA: 'camera', PREVIEW: 'preview',
+  ONBOARDING: 'onboarding', CAMERA: 'camera', CROP: 'crop', PREVIEW: 'preview',
   ANALYZING: 'analyzing', CATEGORIES: 'categories',
   CONFIRM: 'confirm', PUBLISHING: 'publishing', SUCCESS: 'success',
   HISTORY: 'history', DRAFTS: 'drafts'
@@ -339,7 +340,7 @@ function PhotoStrip({ imgs, onReorder, onDelete, onAdd, showAdd = true }) {
 }
 
 export default function App() {
-  const [screen,      setScreen]      = useState(() => (LS.get('ml_token') && LS.get('anthropic_key')) ? S.CAMERA : S.ONBOARDING)
+  const [screen,      setScreen]      = useState(S.ONBOARDING)
   const [appId,       setAppId]       = useState(() => LS.get('ml_app_id')    || '3829359465845583')
   const [token,       setToken]       = useState(() => LS.get('ml_token')      || '')
   const [tokenDraft,  setTokenDraft]  = useState(() => LS.get('ml_token')      || '')
@@ -563,7 +564,7 @@ export default function App() {
     addImgs([b64])
     beep('capture')
     stopCam()
-    setScreen(S.PREVIEW)
+    setScreen(S.CROP)
   }, [stopCam, addImgs, beep])
 
   // Keep captureRef current so auto-capture always calls latest version
@@ -582,11 +583,11 @@ export default function App() {
         if (++done === list.length) {
           addImgs(loaded.filter(Boolean))
           stopCam()
-          setScreen(S.PREVIEW)
+          setScreen(S.CROP)
           if (fileRef.current) fileRef.current.value = ''
         }
       }
-      r.onerror = () => { if (++done === list.length && loaded.some(Boolean)) { addImgs(loaded.filter(Boolean)); stopCam(); setScreen(S.PREVIEW) } }
+      r.onerror = () => { if (++done === list.length && loaded.some(Boolean)) { addImgs(loaded.filter(Boolean)); stopCam(); setScreen(S.CROP) } }
       r.readAsDataURL(f)
     })
   }, [addImgs, stopCam])
@@ -608,7 +609,7 @@ export default function App() {
     const b64 = dataURL.split(',')[1]
     setImgs(prev => { const slots = 8 - prev.length; return slots > 0 ? [...prev, b64] : prev })
     setShowFsCam(false)
-    setScreen(S.PREVIEW)
+    setScreen(S.CROP)
   }, [])
 
   // ── AUTO-CAPTURE sharpness loop
@@ -1067,6 +1068,12 @@ export default function App() {
               </div>
             </div>
 
+            {tokenDraft && anthDraft && appId && (
+              <button className="btn btn-y" style={{width:'100%',fontSize:15,fontWeight:700}}
+                onClick={() => setScreen(S.CAMERA)}>
+                ▶ Continuar sin cambios
+              </button>
+            )}
             <div className="row">
               <button className="btn btn-d btn-sm" style={{flex:'none',padding:'13px 16px'}}
                 onClick={() => { setHistorial(loadHistory()); setScreen(S.HISTORY) }}>📋 Historial</button>
@@ -1077,7 +1084,7 @@ export default function App() {
                   LS.set('ml_client_secret', secretDraft)
                   setAnthKey(anthDraft); setProxyUrl(proxyDraft); setClientSecret(secretDraft)
                   setScreen(S.CAMERA)
-                }}>Comenzar →</button>
+                }}>Guardar y comenzar →</button>
             </div>
           </>
         )}
@@ -1139,6 +1146,15 @@ export default function App() {
             <ErrMsg e={err} />
             <button className="btn btn-d" style={{width:'100%',fontSize:12}} onClick={() => { stopCam(); setScreen(S.ONBOARDING) }}>⚙ Config</button>
           </>
+        )}
+
+        {/* ── CROP ── */}
+        {screen === S.CROP && imgs.length > 0 && (
+          <CropScreen
+            imgB64={imgs[0]}
+            onCrop={croppedB64 => { setImgs(prev => [croppedB64, ...prev.slice(1)]); setScreen(S.PREVIEW) }}
+            onSkip={() => setScreen(S.PREVIEW)}
+          />
         )}
 
         {/* ── PREVIEW ── */}
