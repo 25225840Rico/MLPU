@@ -60,8 +60,10 @@ export default function CropScreen({ imgB64, onCrop, onSkip }) {
   const clamp = useCallback((b, lay) => {
     const { imgX, imgY, imgW, imgH } = lay || layout
     let { x, y, w, h } = b
-    w = Math.max(MIN_SIZE, Math.min(w, imgW))
-    h = Math.max(MIN_SIZE, Math.min(h, imgH))
+    const minW = Math.min(MIN_SIZE, imgW)
+    const minH = Math.min(MIN_SIZE, imgH)
+    w = Math.max(minW, Math.min(w, imgW))
+    h = Math.max(minH, Math.min(h, imgH))
     x = Math.max(imgX, Math.min(x, imgX + imgW - w))
     y = Math.max(imgY, Math.min(y, imgY + imgH - h))
     return { x, y, w, h }

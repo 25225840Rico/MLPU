@@ -23,6 +23,9 @@ const ML_API = 'https://api.mercadolibre.com'
 const SESSION_KEY = 'ml_session'
 const REFRESH_MARGIN_S = 300 // renovar si quedan < 5 min
 
+// mutex ligero: evita refreshes concurrentes paralelos (race condition KV)
+let refreshingPromise = null
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
@@ -91,7 +94,10 @@ async function getValidAccessToken(env, { force = false } = {}) {
   let session = await getSession(env)
   if (!session?.access_token) throw new Error('No hay sesión ML activa. Re-autoriza en Config.')
   if (force || secsLeft(session) < REFRESH_MARGIN_S) {
-    session = await refreshSession(env, session)
+    if (!refreshingPromise) {
+      refreshingPromise = refreshSession(env, session).finally(() => { refreshingPromise = null })
+    }
+    session = await refreshingPromise
   }
   return session.access_token
 }
