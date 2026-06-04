@@ -607,7 +607,7 @@ export default function App() {
       const found = [], seen = new Set()
       for (const q of (a.categorySearches || []).slice(0, 3)) {
         try {
-          const res  = await fetch(mlBase(`/sites/MLC/domain_discovery/search?q=${encodeURIComponent(q)}`))
+          const res  = await fetch(`https://api.mercadolibre.com/sites/MLC/domain_discovery/search?q=${encodeURIComponent(q)}`)
           const data = await res.json()
           const items = Array.isArray(data) ? data : [data]
           for (const c of items.slice(0, 2)) {
@@ -624,7 +624,7 @@ export default function App() {
       beep('capture')
       setScreen(S.CATEGORIES)
     } catch (e) { setErr('Error IA: ' + e.message); setScreen(S.PREVIEW) }
-  }, [imgs, anthKey, mlBase, beep])
+  }, [imgs, anthKey, beep])
 
   // ── SELECT CATEGORY
   const selectCategory = useCallback(cat => {
@@ -1031,7 +1031,7 @@ export default function App() {
               <button className="btn btn-d btn-sm" style={{flex:'none',padding:'13px 16px'}}
                 onClick={() => { setHistorial(loadHistory()); setScreen(S.HISTORY) }}>📋 Historial</button>
               <button className="btn btn-y" style={{flex:1}}
-                disabled={!appId || !sessionActive || !anthDraft}
+                disabled={!appId || !anthDraft}
                 onClick={() => {
                   LS.set('ml_app_id', appId); LS.set('anthropic_key', anthDraft); LS.set('proxy_url', proxyDraft)
                   setAnthKey(anthDraft); setProxyUrl(proxyDraft)

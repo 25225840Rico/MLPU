@@ -160,7 +160,7 @@ async function handleProxy(request, env, mlPath, search) {
     for (const [k, v] of request.headers.entries()) {
       if (!skip.has(k.toLowerCase())) h.set(k, v)
     }
-    h.set('Authorization', `Bearer ${token}`)
+    if (token) h.set('Authorization', `Bearer ${token}`)
     return h
   }
 
@@ -169,15 +169,22 @@ async function handleProxy(request, env, mlPath, search) {
   // Bufferizar el body para poder reintentar tras un 401.
   const bodyBuf = hasBody ? await request.arrayBuffer() : undefined
 
-  let token = await getValidAccessToken(env)
+  // endpoints públicos de ML que no requieren auth
+  const PUBLIC_PATHS = ['/sites/', '/currencies/', '/countries/']
+  const isPublic = PUBLIC_PATHS.some(p => mlPath.startsWith(p))
+
+  let token
+  if (!isPublic) {
+    token = await getValidAccessToken(env)
+  }
   let upstream = await fetch(mlUrl, {
     method: request.method,
     headers: buildHeaders(token),
     body: bodyBuf,
   })
 
-  // En 401: forzar refresh una vez y reintentar.
-  if (upstream.status === 401) {
+  // En 401: forzar refresh una vez y reintentar (solo rutas con auth).
+  if (!isPublic && upstream.status === 401) {
     token = await getValidAccessToken(env, { force: true })
     upstream = await fetch(mlUrl, {
       method: request.method,
