@@ -4,6 +4,7 @@ import { analyzeProduct, fillAttributesWithAI } from './agents/orchestrator.js'
 const ML = 'https://api.mercadolibre.com'
 const DEBUG = false
 const log = (...a) => { if (DEBUG) console.log(...a) }
+const TOKEN_TTL = 21600 // ML access tokens last 6 hours
 
 const S = {
   ONBOARDING: 'onboarding', CAMERA: 'camera', PREVIEW: 'preview',
@@ -272,7 +273,14 @@ export default function App() {
   const [anthDraft,   setAnthDraft]   = useState(() => LS.get('anthropic_key') || '')
   const [proxyUrl,    setProxyUrl]    = useState(() => LS.get('proxy_url')     || 'https://broad-pond-c45emlpup.aronricocl.workers.dev')
   const [proxyDraft,  setProxyDraft]  = useState(() => LS.get('proxy_url')     || 'https://broad-pond-c45emlpup.aronricocl.workers.dev')
-  const [soundOn,     setSoundOn]     = useState(() => LS.get('sound_on') !== 'false')
+  const [soundOn,       setSoundOn]       = useState(() => LS.get('sound_on') !== 'false')
+  const [clientSecret,  setClientSecret]  = useState(() => LS.get('ml_client_secret') || '')
+  const [secretDraft,   setSecretDraft]   = useState(() => LS.get('ml_client_secret') || '')
+  const [refreshToken,  setRefreshToken]  = useState(() => LS.get('ml_refresh_token') || '')
+  const [rtkDraft,      setRtkDraft]      = useState(() => LS.get('ml_refresh_token') || '')
+  const [tokenObtainedAt, setTokenObtainedAt] = useState(() => Number(LS.get('token_obtained_at')) || null)
+  const [tokenTick,     setTokenTick]     = useState(0) // forces re-render for countdown
+  const [refreshing,    setRefreshing]    = useState(false)
 
   const mlBase = useCallback(path => {
     if (proxyUrl) return `${proxyUrl.replace(/\/$/, '')}/ml${path}`
@@ -280,6 +288,69 @@ export default function App() {
   }, [proxyUrl])
 
   const beep = useCallback((type = 'capture') => playBeep(type, soundOn), [soundOn])
+
+  // ── TOKEN COUNTDOWN
+  const tokenSecsLeft = tokenObtainedAt
+    ? Math.max(0, TOKEN_TTL - Math.floor((Date.now() - tokenObtainedAt) / 1000))
+    : null
+  const fmtTokenTime = s => {
+    if (s === null) return null
+    if (s <= 0) return 'Expirado'
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60)
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+  const tokenColor = tokenSecsLeft === null ? null
+    : tokenSecsLeft <= 0 ? 'var(--r)'
+    : tokenSecsLeft < 1800 ? 'var(--r)'
+    : tokenSecsLeft < 7200 ? 'var(--y)'
+    : 'var(--g)'
+
+  // ── AUTO-REFRESH TOKEN
+  const refreshAccessToken = useCallback(async (silent = false) => {
+    if (!refreshToken || !clientSecret) return false
+    setRefreshing(true)
+    try {
+      const body = new URLSearchParams({
+        grant_type:    'refresh_token',
+        client_id:     appId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken
+      })
+      const r = await fetch(mlBase('/oauth/token'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: body.toString()
+      })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`)
+      const newToken   = data.access_token
+      const newRefresh = data.refresh_token || refreshToken
+      const now = Date.now()
+      setToken(newToken);       LS.set('ml_token', newToken)
+      setTokenDraft(newToken)
+      setRefreshToken(newRefresh); LS.set('ml_refresh_token', newRefresh)
+      setRtkDraft(newRefresh)
+      setTokenObtainedAt(now);  LS.set('token_obtained_at', String(now))
+      log('[token] renovado OK')
+      return true
+    } catch (e) {
+      if (!silent) setErr('No se pudo renovar el token: ' + e.message)
+      return false
+    } finally {
+      setRefreshing(false)
+    }
+  }, [refreshToken, clientSecret, appId, mlBase])
+
+  // Countdown tick every 60s + auto-refresh when < 5 min left
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTokenTick(t => t + 1)
+      if (!tokenObtainedAt || !refreshToken || !clientSecret) return
+      const left = TOKEN_TTL - Math.floor((Date.now() - tokenObtainedAt) / 1000)
+      if (left < 300) refreshAccessToken(true)
+    }, 60_000)
+    return () => clearInterval(id)
+  }, [tokenObtainedAt, refreshToken, clientSecret, refreshAccessToken])
 
   const videoRef     = useRef(null)
   const canvasRef    = useRef(null)
@@ -646,6 +717,12 @@ export default function App() {
         <div className="top">
           <span className="logo">ML</span>
           <h1>Auto<em>Publisher</em></h1>
+          {fmtTokenTime(tokenSecsLeft) && (
+            <span className="cnt" style={{color: tokenColor, borderColor: tokenColor, cursor: refreshToken && clientSecret ? 'pointer' : 'default'}}
+              onClick={() => refreshToken && clientSecret && refreshAccessToken()}>
+              {refreshing ? '⟳' : '🔑'} {fmtTokenTime(tokenSecsLeft)}
+            </span>
+          )}
           {count > 0 && <span className="cnt">{count} publicados</span>}
         </div>
 
@@ -668,6 +745,12 @@ export default function App() {
               <hr />
               <div className="f"><label>Proxy URL</label>
                 <input value={proxyDraft} onChange={e => setProxyDraft(e.target.value)} placeholder="https://mlpu-proxy.TU.workers.dev" autoComplete="off" /></div>
+              <hr />
+              <div className="f"><label>Client Secret <span style={{color:'var(--dim)',fontWeight:400,fontSize:9}}>(para renovar token)</span></label>
+                <input type="password" value={secretDraft} onChange={e => setSecretDraft(e.target.value)} placeholder="TU_CLIENT_SECRET" autoComplete="off" /></div>
+              <div className="f"><label>Refresh Token <span style={{color:'var(--dim)',fontWeight:400,fontSize:9}}>(se actualiza solo)</span></label>
+                <input type="password" value={rtkDraft} onChange={e => setRtkDraft(e.target.value)} placeholder="TG-..." autoComplete="off" /></div>
+              <div className="note">Con Client Secret + Refresh Token el access token se renueva automáticamente cada 6 h. Obténlos desde el panel de tu app en <code>developers.mercadolibre.cl</code>.</div>
               <div className="note">Datos guardados solo en tu navegador (<code>localStorage</code>).</div>
               <div className="toggle-row" style={{paddingTop:0,paddingBottom:0}}>
                 <div><div className="toggle-label" style={{fontSize:13}}>Sonido metálico</div>
@@ -685,7 +768,11 @@ export default function App() {
                 onClick={() => {
                   LS.set('ml_app_id', appId); LS.set('ml_token', tokenDraft)
                   LS.set('anthropic_key', anthDraft); LS.set('proxy_url', proxyDraft)
+                  LS.set('ml_client_secret', secretDraft); LS.set('ml_refresh_token', rtkDraft)
+                  const now = Date.now()
+                  if (!tokenObtainedAt) { setTokenObtainedAt(now); LS.set('token_obtained_at', String(now)) }
                   setToken(tokenDraft); setAnthKey(anthDraft); setProxyUrl(proxyDraft)
+                  setClientSecret(secretDraft); setRefreshToken(rtkDraft)
                   setScreen(S.CAMERA)
                 }}>Comenzar →</button>
             </div>
