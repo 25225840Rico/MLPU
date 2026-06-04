@@ -320,6 +320,8 @@ const LS = {
   get: k => { try { return localStorage.getItem(k) || '' } catch { return '' } },
   set: (k, v) => { try { localStorage.setItem(k, v) } catch {} }
 }
+// migración: reemplaza Worker URL viejo si el usuario lo tenía guardado
+;(()=>{ try { const OLD='https://broad-pond-c45emlpup.aronricocl.workers.dev'; const NEW='https://mlpu-proxy.aronricocl.workers.dev'; if(localStorage.getItem('proxy_url')===OLD){localStorage.setItem('proxy_url',NEW)} } catch{} })()
 
 function PhotoStrip({ imgs, onReorder, onDelete, onAdd, showAdd = true }) {
   return (
