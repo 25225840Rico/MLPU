@@ -10,7 +10,7 @@ const S = {
   ONBOARDING: 'onboarding', CAMERA: 'camera', PREVIEW: 'preview',
   ANALYZING: 'analyzing', CATEGORIES: 'categories',
   CONFIRM: 'confirm', PUBLISHING: 'publishing', SUCCESS: 'success',
-  HISTORY: 'history'
+  HISTORY: 'history', DRAFTS: 'drafts'
 }
 
 // ── SOUND (metálico con WaveShaper)
@@ -66,6 +66,35 @@ function loadHistory() {
   try { return JSON.parse(localStorage.getItem(HIST_KEY) || '[]') } catch { return [] }
 }
 
+// ── DRAFTS
+const DRAFTS_KEY = 'mlpu_drafts'
+
+async function compressForDraft(b64) {
+  return compressToThumb(b64, 480)
+}
+
+function saveDraft(draft) {
+  try {
+    const all = loadDrafts()
+    const idx = all.findIndex(d => d.id === draft.id)
+    if (idx >= 0) all[idx] = draft; else all.unshift(draft)
+    if (all.length > 50) all.length = 50
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
+  } catch {}
+}
+function loadDrafts() {
+  try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '[]') } catch { return [] }
+}
+function deleteDraft(id) {
+  try {
+    const all = loadDrafts().filter(d => d.id !== id)
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
+  } catch {}
+}
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+}
+
 // ── SHARPNESS (varianza del Laplaciano sobre frame reducido)
 function measureSharpness(video, canvas) {
   try {
@@ -85,19 +114,27 @@ function measureSharpness(video, canvas) {
   } catch { return 0 }
 }
 
-// ── THUMBNAIL para historial
-async function compressToThumb(b64, maxW = 100) {
+// ── THUMBNAIL para historial (con fix para mobile)
+async function compressToThumb(b64, maxW = 120) {
+  if (!b64) return ''
   return new Promise(resolve => {
-    const img = new Image()
-    img.onload = () => {
-      const scale = Math.min(1, maxW / Math.max(img.width, img.height))
-      const c = document.createElement('canvas')
-      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale)
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
-      resolve(c.toDataURL('image/jpeg', 0.7).split(',')[1])
-    }
-    img.onerror = () => resolve('')
-    img.src = 'data:image/jpeg;base64,' + b64
+    try {
+      const img = new Image()
+      const timeout = setTimeout(() => resolve(''), 3000)
+      img.onload = () => {
+        clearTimeout(timeout)
+        try {
+          const scale = Math.min(1, maxW / Math.max(img.width, img.height, 1))
+          const c = document.createElement('canvas')
+          c.width = Math.round(img.width * scale) || maxW
+          c.height = Math.round(img.height * scale) || maxW
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
+          resolve(c.toDataURL('image/jpeg', 0.75).split(',')[1])
+        } catch { resolve('') }
+      }
+      img.onerror = () => { clearTimeout(timeout); resolve('') }
+      img.src = 'data:image/jpeg;base64,' + b64
+    } catch { resolve('') }
   })
 }
 
@@ -107,93 +144,103 @@ const css = `
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
-  --bg:#06060a;--s1:#0e0e18;--s2:#16162a;--s3:#1e1e32;
-  --brd:#28283e;--brd2:#38385a;
-  --y:#ffe234;--g:#00d4a0;--r:#ff4f7b;--b:#3483fa;
-  --txt:#e0e0f0;--dim:#5858a0;--mono:'JetBrains Mono',monospace;
+  --bg:#f5f7fe;--s1:#ffffff;--s2:#ffffff;--s3:#eef1fd;
+  --brd:#dde3f7;--brd2:#c5ceee;
+  --y:#f59e0b;--yb:#fffbeb;--g:#059669;--r:#dc2626;--b:#2563eb;--bb:#eff6ff;
+  --txt:#0f172a;--dim:#64748b;--mono:'JetBrains Mono',monospace;
 }
 body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-serif;min-height:100dvh;overscroll-behavior:none}
 .app{max-width:430px;margin:0 auto;padding:16px 14px max(80px,calc(60px + env(safe-area-inset-bottom)));display:flex;flex-direction:column;gap:16px}
 .top{display:flex;align-items:center;gap:8px;padding-bottom:14px;border-bottom:1px solid var(--brd)}
 .logo{background:var(--y);color:#000;font-size:9px;font-weight:800;letter-spacing:2px;padding:4px 8px;border-radius:5px}
-.top h1{font-size:16px;font-weight:700;flex:1}.top h1 em{color:var(--y);font-style:normal}
-.cnt{font-size:11px;font-family:var(--mono);color:var(--dim);background:var(--s2);border:1px solid var(--brd);border-radius:20px;padding:3px 9px}
-.card{background:var(--s2);border:1px solid var(--brd);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:13px}
+.top h1{font-size:16px;font-weight:700;flex:1}.top h1 em{color:var(--b);font-style:normal}
+.cnt{font-size:11px;font-family:var(--mono);color:var(--b);background:var(--bb);border:1px solid var(--brd);border-radius:20px;padding:3px 9px}
+.card{background:#fff;box-shadow:0 1px 4px rgba(30,40,120,.07),0 0 0 1px var(--brd);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:13px}
 .card h2{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:var(--dim)}
 .f{display:flex;flex-direction:column;gap:4px}
 .f label,.lbl{font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:1.2px}
-.f input,.f select,.f textarea,.ei{background:var(--s1);border:1px solid var(--brd);border-radius:9px;color:var(--txt);font-family:var(--mono);font-size:16px;padding:10px 12px;outline:none;width:100%;transition:border-color .15s;resize:vertical;-webkit-appearance:none;appearance:none}
-.f input:focus,.f select:focus,.f textarea:focus,.ei:focus{border-color:var(--y)}
+.f input,.f select,.f textarea,.ei{background:#fff;border:1px solid var(--brd);border-radius:9px;color:var(--txt);font-family:var(--mono);font-size:16px;padding:10px 12px;outline:none;width:100%;transition:border-color .15s;resize:vertical;-webkit-appearance:none;appearance:none}
+.f input:focus,.f select:focus,.f textarea:focus,.ei:focus{border-color:var(--b)}
 .f input::placeholder,.ei::placeholder{color:var(--dim);opacity:.6}
-.f select option{background:var(--s1)}
+.f select option{background:#fff}
 .note{font-size:11px;color:var(--dim);background:var(--s3);border:1px solid var(--brd);border-radius:8px;padding:10px 13px;line-height:1.8}
 .note code{color:var(--g);font-family:var(--mono);font-size:10px;word-break:break-all}
 .btn{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;border:none;border-radius:12px;cursor:pointer;padding:13px 18px;transition:all .1s;display:inline-flex;align-items:center;justify-content:center;gap:7px;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .btn:active{transform:scale(.96)}
-.btn-y{background:var(--y);color:#000;width:100%;font-size:15px;padding:15px}
-.btn-y:hover{background:#f0d400}
+.btn-y{background:var(--b);color:#fff;width:100%;font-size:15px;padding:15px}
+.btn-y:hover{background:#1d4ed8}
 .btn-y:disabled{background:var(--brd);color:var(--dim);cursor:not-allowed;transform:none}
-.btn-d{background:var(--s2);color:var(--txt);border:1px solid var(--brd);flex:1}
+.btn-d{background:#fff;color:var(--txt);border:1px solid var(--brd);flex:1}
 .btn-d:hover{border-color:var(--brd2)}
 .btn-sm{font-size:12px;padding:7px 13px;border-radius:8px}
-.btn-r{background:rgba(255,79,123,.12);color:var(--r);border:1px solid rgba(255,79,123,.3);width:100%}
-.btn-r:hover{background:rgba(255,79,123,.2)}
+.btn-r{background:rgba(220,38,38,.08);color:var(--r);border:1px solid rgba(220,38,38,.25);width:100%}
+.btn-r:hover{background:rgba(220,38,38,.14)}
 .row{display:flex;gap:10px}
 .cam{position:relative;border-radius:20px;overflow:hidden;aspect-ratio:4/3;background:#000;border:2px solid var(--brd);transition:border-color .3s,box-shadow .3s}
-.cam.searching{border-color:var(--r);box-shadow:0 0 0 2px rgba(255,79,123,.2)}
-.cam.focused{border-color:var(--g);box-shadow:0 0 0 3px rgba(0,212,160,.3);animation:pulse-g .5s ease}
-@keyframes pulse-g{0%{box-shadow:0 0 0 0 rgba(0,212,160,.6)}100%{box-shadow:0 0 0 12px rgba(0,212,160,0)}}
-.cam.dragover{border-color:var(--b);background:rgba(52,131,250,.08)}
+.cam.searching{border-color:var(--r);box-shadow:0 0 0 2px rgba(220,38,38,.15)}
+.cam.focused{border-color:var(--g);box-shadow:0 0 0 3px rgba(5,150,105,.2);animation:pulse-g .5s ease}
+@keyframes pulse-g{0%{box-shadow:0 0 0 0 rgba(5,150,105,.4)}100%{box-shadow:0 0 0 12px rgba(5,150,105,0)}}
+.cam.dragover{border-color:var(--b);background:rgba(37,99,235,.06)}
 .cam video,.cam img{width:100%;height:100%;object-fit:cover;display:block}
 .cam-idle{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--dim)}
 .cam-idle span{font-size:48px}.cam-idle p{font-size:12px}
-.corner{position:absolute;width:26px;height:26px;border-color:var(--y);border-style:solid;opacity:.6}
+.corner{position:absolute;width:26px;height:26px;border-color:var(--b);border-style:solid;opacity:.6}
 .corner.tl{top:14px;left:14px;border-width:2px 0 0 2px;border-radius:3px 0 0 0}
 .corner.tr{top:14px;right:14px;border-width:2px 2px 0 0;border-radius:0 3px 0 0}
 .corner.bl{bottom:14px;left:14px;border-width:0 0 2px 2px;border-radius:0 0 0 3px}
 .corner.br{bottom:14px;right:14px;border-width:0 2px 2px 0;border-radius:0 0 3px 0}
 .focus-lbl{position:absolute;top:12px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap;pointer-events:none}
-.focus-lbl.ready{background:rgba(0,212,160,.9);color:#000}
-.focus-lbl.seeking{background:rgba(255,79,123,.85);color:#fff}
-.shutter{width:70px;height:70px;border-radius:50%;background:var(--y);border:4px solid rgba(255,226,52,.25);cursor:pointer;box-shadow:0 0 0 2px var(--y);margin:0 auto;transition:transform .1s;display:flex;align-items:center;justify-content:center;touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.focus-lbl.ready{background:rgba(5,150,105,.9);color:#fff}
+.focus-lbl.seeking{background:rgba(220,38,38,.85);color:#fff}
+.shutter{width:70px;height:70px;border-radius:50%;background:var(--b);border:4px solid rgba(37,99,235,.2);cursor:pointer;box-shadow:0 0 0 2px var(--b);margin:0 auto;transition:transform .1s;display:flex;align-items:center;justify-content:center;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .shutter:active{transform:scale(.88)}
-.shutter-ring{width:86px;height:86px;border-radius:50%;border:1.5px solid rgba(255,226,52,.2);display:flex;align-items:center;justify-content:center;margin:0 auto}
-.shutter-inner{width:30px;height:30px;border-radius:50%;background:#000;pointer-events:none}
+.shutter-ring{width:86px;height:86px;border-radius:50%;border:1.5px solid rgba(37,99,235,.18);display:flex;align-items:center;justify-content:center;margin:0 auto}
+.shutter-inner{width:30px;height:30px;border-radius:50%;background:#fff;pointer-events:none}
 .cam-actions{display:flex;flex-direction:column;gap:12px;align-items:center}
 .photo-strip{display:flex;gap:8px;overflow-x:auto;padding:4px 0;-webkit-overflow-scrolling:touch}
 .photo-strip::-webkit-scrollbar{height:3px}.photo-strip::-webkit-scrollbar-thumb{background:var(--brd);border-radius:2px}
 .pthumb{position:relative;flex-shrink:0;width:72px;height:72px;border-radius:10px;overflow:hidden;border:2px solid var(--brd);cursor:pointer;transition:border-color .15s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
-.pthumb.main{border-color:var(--y);box-shadow:0 0 0 1px var(--y)}
+.pthumb.main{border-color:var(--b);box-shadow:0 0 0 1px var(--b)}
 .pthumb img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
-.pthumb .mb{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);font-size:7px;font-weight:800;background:var(--y);color:#000;padding:1px 4px;border-radius:4px;white-space:nowrap;pointer-events:none}
-.pthumb .del{position:absolute;top:-2px;right:-2px;width:24px;height:24px;border-radius:50%;background:rgba(20,20,40,.9);color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1.5px solid rgba(255,255,255,.3);touch-action:manipulation}
+.pthumb .mb{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);font-size:7px;font-weight:800;background:var(--b);color:#fff;padding:1px 4px;border-radius:4px;white-space:nowrap;pointer-events:none}
+.pthumb .del{position:absolute;top:-2px;right:-2px;width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.95);color:var(--txt);font-size:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1.5px solid var(--brd);touch-action:manipulation}
 .add-photo{flex-shrink:0;width:72px;height:72px;border-radius:10px;border:2px dashed var(--brd2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;color:var(--dim);font-size:9px;gap:4px;transition:border-color .15s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
-.add-photo:hover,.add-photo:active{border-color:var(--y);color:var(--y)}
+.add-photo:hover,.add-photo:active{border-color:var(--b);color:var(--b)}
 .add-photo span{font-size:22px;pointer-events:none}
-.loader{background:var(--s2);border:1px solid var(--brd);border-radius:18px;padding:36px 22px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}
-.ring{width:72px;height:72px;border-radius:50%;border:3px solid var(--brd2);border-top-color:var(--y);animation:spin .7s linear infinite}
-.ring-sm{width:16px;height:16px;border-radius:50%;border:2px solid var(--brd2);border-top-color:var(--y);animation:spin .7s linear infinite;display:inline-block}
+.loader{background:#fff;box-shadow:0 1px 4px rgba(30,40,120,.07),0 0 0 1px var(--brd);border-radius:18px;padding:36px 22px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}
+.ring{width:72px;height:72px;border-radius:50%;border:3px solid var(--brd2);border-top-color:var(--b);animation:spin .7s linear infinite}
+.ring-sm{width:16px;height:16px;border-radius:50%;border:2px solid var(--brd2);border-top-color:var(--b);animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
 .agents{display:flex;flex-direction:column;gap:7px;width:100%;margin-top:4px}
 .agent{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--s3);border-radius:9px;font-size:12px;color:var(--dim)}
-.agent .dot{width:6px;height:6px;border-radius:50%;background:var(--y);animation:blink .9s infinite;flex-shrink:0}
+.agent .dot{width:6px;height:6px;border-radius:50%;background:var(--b);animation:blink .9s infinite;flex-shrink:0}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.1}}
+.progress-track{height:5px;background:var(--brd);border-radius:3px;overflow:hidden;width:100%}
+.progress-fill{height:100%;background:var(--b);border-radius:3px;transition:width .4s ease}
+.progress-fill.g{background:var(--g)}
+.progress-fill.shimmer{width:100%;background:linear-gradient(90deg,var(--brd) 0%,var(--b) 40%,var(--brd) 100%);background-size:200% 100%;animation:shimmer 1.4s infinite}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.agent-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--brd)}
+.agent-row:last-child{border-bottom:none}
+.agent-lbl{font-size:12px;flex:1;color:var(--dim)}
+.agent-lbl.done{color:var(--txt);font-weight:600}
+.agent-bar{width:100px;flex-shrink:0}
 .thumb{border-radius:14px;overflow:hidden;aspect-ratio:4/3;border:1px solid var(--brd)}
 .thumb img{width:100%;height:100%;object-fit:cover}
 .thumb-16{border-radius:14px;overflow:hidden;aspect-ratio:16/9;border:1px solid var(--brd)}
 .thumb-16 img{width:100%;height:100%;object-fit:cover}
 .cat-list{display:flex;flex-direction:column;gap:8px}
-.cat-item{background:var(--s2);border:1px solid var(--brd);border-radius:13px;padding:13px 15px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;transition:all .12s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
-.cat-item:hover{border-color:var(--y);background:var(--s3)}
+.cat-item{background:#fff;border:1px solid var(--brd);border-radius:13px;padding:13px 15px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;transition:all .12s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.cat-item:hover{border-color:var(--b);background:var(--bb)}
 .cat-item.no-id{opacity:.6;cursor:not-allowed}
 .cat-name{font-size:14px;font-weight:600}
 .cat-id{font-size:11px;font-family:var(--mono);color:var(--dim);margin-top:2px}
-.arrow{color:var(--y);font-size:16px}
-.panel{background:var(--s2);border:1px solid var(--brd);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.arrow{color:var(--b);font-size:16px}
+.panel{background:#fff;box-shadow:0 1px 4px rgba(30,40,120,.07),0 0 0 1px var(--brd);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
 .panel-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.8px;color:var(--dim)}
 .listing-tabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
 .lt-tab{background:var(--s3);border:1px solid var(--brd);border-radius:9px;padding:8px 6px;cursor:pointer;text-align:center;transition:all .12s}
-.lt-tab.active{border-color:var(--y);background:rgba(255,226,52,.07)}
+.lt-tab.active{border-color:var(--b);background:var(--bb)}
 .lt-tab .lt-name{font-size:11px;font-weight:700}
 .lt-tab .lt-fee{font-size:10px;font-family:var(--mono);color:var(--dim);margin-top:2px}
 .lt-tab .lt-gain{font-size:10px;color:var(--g);margin-top:1px}
@@ -212,34 +259,35 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .toggle-label{font-size:13px;font-weight:600}
 .toggle-sub{font-size:11px;color:var(--dim);margin-top:1px}
 .toggle{width:40px;height:22px;border-radius:11px;background:var(--brd2);cursor:pointer;position:relative;transition:background .15s;flex-shrink:0;border:none;touch-action:manipulation;user-select:none;-webkit-user-select:none}
-.toggle.on{background:var(--y)}
+.toggle.on{background:var(--b)}
 .toggle::after{content:'';position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:3px;left:3px;transition:left .15s}
-.toggle.on::after{left:21px;background:#000}
+.toggle.on::after{left:21px;background:#fff}
 .attr-grid{display:flex;flex-direction:column;gap:8px}
 .attr-item{display:flex;flex-direction:column;gap:3px}
 .attr-name{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
 .attr-missing{border-color:var(--r) !important}
 .cat-strip{display:flex;align-items:center;justify-content:space-between;background:var(--s3);border:1px solid var(--brd);border-radius:9px;padding:10px 13px}
 .change{font-size:12px;color:var(--dim);cursor:pointer;text-decoration:underline}
-.change:hover{color:var(--y)}
-.success{background:var(--s2);border:1px solid var(--g);border-radius:18px;padding:32px 22px;display:flex;flex-direction:column;align-items:center;gap:13px;text-align:center}
+.change:hover{color:var(--b)}
+.success{background:#fff;border:1px solid var(--g);border-radius:18px;padding:32px 22px;display:flex;flex-direction:column;align-items:center;gap:13px;text-align:center}
 .ok{font-size:52px}
 .pub-link{font-family:var(--mono);font-size:11px;color:var(--b);word-break:break-all;background:var(--s3);border-radius:8px;padding:10px 13px;width:100%;text-align:left}
 .pub-link a{color:inherit}
-.err{background:rgba(255,79,123,.07);border:1px solid rgba(255,79,123,.3);border-radius:10px;padding:11px 14px;font-size:12px;color:var(--r);display:flex;gap:8px;align-items:flex-start;word-break:break-word}
-.warn{background:rgba(255,226,52,.06);border:1px solid rgba(255,226,52,.25);border-radius:10px;padding:10px 13px;font-size:12px;color:var(--y)}
+.err{background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.25);border-radius:10px;padding:11px 14px;font-size:12px;color:var(--r);display:flex;gap:8px;align-items:flex-start;word-break:break-word}
+.ok-msg{background:rgba(5,150,105,.08);border:1px solid rgba(5,150,105,.25);border-radius:10px;padding:11px 14px;font-size:12px;color:var(--g);display:flex;gap:8px;align-items:flex-start}
+.warn{background:var(--yb);border:1px solid rgba(245,158,11,.25);border-radius:10px;padding:10px 13px;font-size:12px;color:var(--y)}
 hr{border:none;border-top:1px solid var(--brd)}
 ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:var(--brd);border-radius:2px}
 .hist-list{display:flex;flex-direction:column;gap:10px}
-.hist-item{display:flex;gap:12px;align-items:center;background:var(--s2);border:1px solid var(--brd);border-radius:13px;padding:11px 13px;cursor:pointer;transition:border-color .12s}
-.hist-item:hover{border-color:var(--y)}
+.hist-item{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--brd);border-radius:13px;padding:11px 13px;cursor:pointer;transition:border-color .12s}
+.hist-item:hover{border-color:var(--b)}
 .hist-thumb{width:56px;height:56px;border-radius:9px;overflow:hidden;flex-shrink:0;background:var(--s3);border:1px solid var(--brd);display:flex;align-items:center;justify-content:center}
 .hist-thumb img{width:100%;height:100%;object-fit:cover}
 .hist-info{flex:1;min-width:0}
 .hist-title{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hist-meta{font-size:11px;color:var(--dim);margin-top:2px;line-height:1.5}
 .hist-gain{font-size:12px;font-weight:700;color:var(--g);font-family:var(--mono)}
-.empty-hist{text-align:center;padding:40px 20px;color:var(--dim);font-size:13px;background:var(--s2);border-radius:16px;border:1px solid var(--brd);line-height:2}
+.empty-hist{text-align:center;padding:40px 20px;color:var(--dim);font-size:13px;background:#fff;border-radius:16px;border:1px solid var(--brd);line-height:2}
 `
 
 const LS = {
@@ -435,6 +483,19 @@ export default function App() {
   const [shippingCost,   setShippingCost]   = useState(3000)
   const [productCost,    setProductCost]    = useState(0)
 
+  // ── ANALYZING progress
+  const [analysisDone,   setAnalysisDone]   = useState(false)
+
+  // ── PUBLISHING progress
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 1 })
+
+  // ── DRAFTS
+  const [drafts,         setDrafts]         = useState(() => loadDrafts())
+  const [selectedDrafts, setSelectedDrafts] = useState(new Set())
+  const [batchProgress,  setBatchProgress]  = useState(null) // {current,total,title}
+  const [currentDraftId, setCurrentDraftId] = useState(null)
+  const [savingDraft,    setSavingDraft]    = useState(false)
+
   // ── CAMERA
   const stopCam = useCallback(() => {
     if (stream) { stream.getTracks().forEach(t => t.stop()); setStream(null) }
@@ -549,10 +610,11 @@ export default function App() {
   // ── ANALYZE
   const analyze = useCallback(async () => {
     if (!imgs.length) return
-    setErr(null); setScreen(S.ANALYZING)
+    setErr(null); setAnalysisDone(false); setScreen(S.ANALYZING)
     try {
       const a = await analyzeProduct(imgs[0], anthKey)
       setAnalysis(a)
+      setAnalysisDone(true)
       const found = [], seen = new Set()
       for (const q of (a.categorySearches || []).slice(0, 3)) {
         try {
@@ -670,9 +732,11 @@ export default function App() {
       return
     }
     setScreen(S.PUBLISHING); setErr(null)
+    setUploadProgress({ current: 0, total: imgs.length })
     try {
       const pictures = []
-      for (const imgB64 of imgs) {
+      for (let i = 0; i < imgs.length; i++) {
+        const imgB64 = imgs[i]
         try {
           const blob = await (await fetch(`data:image/jpeg;base64,${imgB64}`)).blob()
           const form = new FormData(); form.append('file', blob, 'product.jpg')
@@ -682,6 +746,7 @@ export default function App() {
           if (pr.ok) { const pd = await pr.json(); pictures.push({ id: pd.id }) }
           else log('[publish] img fail:', pr.status)
         } catch (e) { log('[publish] img err:', e.message) }
+        setUploadProgress({ current: i + 1, total: imgs.length })
       }
       const attributes = Object.entries(attrValues)
         .filter(([, v]) => v?.toString().trim())
@@ -724,23 +789,160 @@ export default function App() {
         const causes = (data.cause || []).map(c => c.message || c.code || JSON.stringify(c)).join(' | ')
         throw new Error(`${data.message}${causes ? ': ' + causes : ''}`)
       }
-      // Save history
-      const thumb = imgs[0] ? await compressToThumb(imgs[0]) : ''
-      const profitNow = editPrice - currentFee - shippingDeduct - productCost
-      saveToHistory({ id: data.id, title: editTitle, price: editPrice, thumbnail: thumb,
-        permalink: data.permalink || '', fecha: new Date().toISOString(),
-        category_name: selCat.name, ganancia_neta: profitNow })
-      setHistorial(loadHistory())
+      // Save history (in separate try/catch so thumbnail failure doesn't block save)
+      try {
+        const thumb = await compressToThumb(imgs[0] || '')
+        const profitNow = editPrice - currentFee - shippingDeduct - productCost
+        saveToHistory({ id: data.id, title: editTitle, price: editPrice,
+          thumbnail: thumb, permalink: data.permalink || '',
+          fecha: new Date().toISOString(), category_name: selCat.name, ganancia_neta: profitNow })
+        setHistorial(loadHistory())
+      } catch {}
       setResult(data); setCount(c => c + 1); beep('success'); setScreen(S.SUCCESS)
     } catch (e) { setErr('Error publicando: ' + e.message); setScreen(S.CONFIRM) }
   }, [selCat, analysis, imgs, token, mlBase, editTitle, editPrice, editDesc, editCondition,
       editQty, listingType, requiredAttrs, attrValues, freeShipping, localPickup,
       currentFee, shippingDeduct, productCost, beep])
 
+  // ── SAVE DRAFT
+  const saveCurrentDraft = useCallback(async () => {
+    setSavingDraft(true)
+    try {
+      const thumb = await compressToThumb(imgs[0] || '')
+      const compImgs = await Promise.all(imgs.map(b => compressForDraft(b)))
+      const id = currentDraftId || genId()
+      saveDraft({
+        id, created: new Date().toISOString(), thumb,
+        imgs: compImgs, analysis, selCat,
+        editTitle, editPrice, editDesc, editCondition, editQty,
+        listingType, attrValues, requiredAttrs,
+        freeShipping, localPickup, shippingCost, productCost
+      })
+      setCurrentDraftId(id)
+      setDrafts(loadDrafts())
+      setErr('✓ Borrador guardado')
+      setTimeout(() => setErr(null), 2000)
+    } catch (e) {
+      setErr('Error al guardar borrador: ' + e.message)
+    } finally {
+      setSavingDraft(false)
+    }
+  }, [imgs, analysis, selCat, editTitle, editPrice, editDesc, editCondition, editQty,
+      listingType, attrValues, requiredAttrs, freeShipping, localPickup, shippingCost, productCost, currentDraftId])
+
+  // ── LOAD DRAFT TO CONFIRM
+  const loadDraftToConfirm = useCallback((draft) => {
+    setImgs(draft.imgs || [])
+    setAnalysis(draft.analysis)
+    setSelCat(draft.selCat)
+    setEditTitle(draft.editTitle || '')
+    setEditPrice(draft.editPrice || 0)
+    setEditDesc(draft.editDesc || '')
+    setEditCondition(draft.editCondition || 'used')
+    setEditQty(draft.editQty || 1)
+    setListingType(draft.listingType || 'free')
+    setAttrValues(draft.attrValues || {})
+    setRequiredAttrs(draft.requiredAttrs || [])
+    setFreeShipping(draft.freeShipping || false)
+    setLocalPickup(draft.localPickup || false)
+    setShippingCost(draft.shippingCost || 3000)
+    setProductCost(draft.productCost || 0)
+    setMissingAttrIds([])
+    setCommissions(null); setCompPrices(null)
+    setCurrentDraftId(draft.id)
+    setScreen(S.CONFIRM)
+  }, [])
+
+  // ── PUBLISH BATCH
+  const publishBatch = useCallback(async () => {
+    const toPublish = drafts.filter(d => selectedDrafts.has(d.id))
+    if (!toPublish.length) return
+    setBatchProgress({ current: 0, total: toPublish.length, title: '' })
+    let published = 0
+    const errors = []
+
+    for (let i = 0; i < toPublish.length; i++) {
+      const draft = toPublish[i]
+      setBatchProgress({ current: i, total: toPublish.length, title: draft.editTitle })
+      try {
+        // subir fotos
+        const pictures = []
+        for (const imgB64 of (draft.imgs || [])) {
+          try {
+            const blob = await (await fetch(`data:image/jpeg;base64,${imgB64}`)).blob()
+            const form = new FormData(); form.append('file', blob, 'product.jpg')
+            const pr = await fetch(mlBase('/pictures/items/upload'), {
+              method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form
+            })
+            if (pr.ok) { const pd = await pr.json(); pictures.push({ id: pd.id }) }
+          } catch {}
+        }
+        const attributes = Object.entries(draft.attrValues || {})
+          .filter(([, v]) => v?.toString().trim())
+          .map(([id, value_name]) => ({ id, value_name: value_name.toString() }))
+        const payload = {
+          title: (draft.editTitle || '').slice(0, 60),
+          category_id: draft.selCat.id,
+          price: draft.editPrice,
+          currency_id: 'CLP',
+          available_quantity: draft.editQty || 1,
+          buying_mode: 'buy_it_now',
+          condition: draft.editCondition || 'used',
+          listing_type_id: draft.listingType || 'free',
+          description: { plain_text: draft.editDesc || draft.editTitle || '' },
+          ...(pictures.length && { pictures }),
+          ...(attributes.length && { attributes }),
+          shipping: draft.freeShipping
+            ? { mode: 'me2', free_methods: [], free_shipping: true, local_pick_up: draft.localPickup || false }
+            : { mode: 'me2', free_shipping: false, local_pick_up: draft.localPickup || false },
+          sale_terms: [
+            { id: 'WARRANTY_TYPE', value_name: 'Garantía del vendedor' },
+            { id: 'WARRANTY_TIME', value_name: '30 días' }
+          ]
+        }
+        const r = await fetch(mlBase('/items'), {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        const data = await r.json()
+        if (!r.ok) throw new Error(data.message || 'Error')
+        // guardar en historial
+        try {
+          const thumb = await compressToThumb(draft.imgs?.[0] || '')
+          saveToHistory({ id: data.id, title: draft.editTitle, price: draft.editPrice,
+            thumbnail: thumb, permalink: data.permalink || '',
+            fecha: new Date().toISOString(), category_name: draft.selCat?.name || '',
+            ganancia_neta: draft.editPrice - (draft.productCost || 0) })
+        } catch {}
+        deleteDraft(draft.id)
+        published++
+      } catch (e) {
+        errors.push(draft.editTitle + ': ' + e.message)
+      }
+    }
+
+    setDrafts(loadDrafts())
+    setHistorial(loadHistory())
+    setSelectedDrafts(new Set())
+    setBatchProgress(null)
+    setCount(c => c + published)
+
+    if (published > 0) {
+      beep('success')
+      if (errors.length) {
+        setErr(`${published} publicados. Errores: ${errors.join(' | ')}`)
+      }
+    } else if (errors.length) {
+      setErr('No se pudo publicar: ' + errors.join(' | '))
+    }
+  }, [drafts, selectedDrafts, token, mlBase, beep])
+
   const reset = () => {
     setImgs([]); setAnalysis(null); setCats([]); setSelCat(null)
     setResult(null); setErr(null); setRequiredAttrs([]); setAttrValues({})
     setMissingAttrIds([]); setCommissions(null); setCompPrices(null)
+    setCurrentDraftId(null)
     setScreen(S.CAMERA)
   }
 
@@ -748,6 +950,14 @@ export default function App() {
 
   const LT_LABELS = { free: 'Gratuita', gold_special: 'Clásica', gold_pro: 'Premium' }
   const camClass = `cam${borderState === 'focused' ? ' focused' : borderState === 'searching' ? ' searching' : ''}${dragOver ? ' dragover' : ''}`
+
+  // Helper for error/ok message rendering
+  const ErrMsg = ({ e }) => {
+    if (!e) return null
+    if (e.startsWith('✓'))
+      return <div className="ok-msg"><span>✓</span><span>{e.slice(2)}</span></div>
+    return <div className="err"><span>⚠</span><span>{e}</span></div>
+  }
 
   return (
     <>
@@ -867,6 +1077,12 @@ export default function App() {
                       ⚡ Analizar con IA ({imgs.length} foto{imgs.length > 1 ? 's' : ''})
                     </button>
                   )}
+                  {drafts.length > 0 && (
+                    <button className="btn btn-d btn-sm" style={{width:'100%'}}
+                      onClick={() => setScreen(S.DRAFTS)}>
+                      📋 Borradores ({drafts.length})
+                    </button>
+                  )}
                 </>
               ) : (
                 <>
@@ -885,7 +1101,7 @@ export default function App() {
                 </>
               )}
             </div>
-            {err && <div className="err"><span>⚠</span><span>{err}</span></div>}
+            <ErrMsg e={err} />
             <button className="btn btn-d" style={{width:'100%',fontSize:12}} onClick={() => setScreen(S.ONBOARDING)}>⚙ Config</button>
           </>
         )}
@@ -903,7 +1119,7 @@ export default function App() {
               <button className="btn btn-d" onClick={() => fileRef.current?.click()}>📁 Agregar</button>
               <input ref={fileRef} type="file" accept="image/*" multiple style={{display:'none'}} onChange={e => handleFiles(e.target.files)} />
             </div>
-            {err && <div className="err"><span>⚠</span><span>{err}</span></div>}
+            <ErrMsg e={err} />
           </>
         )}
 
@@ -914,8 +1130,23 @@ export default function App() {
             <div style={{fontSize:16,fontWeight:700}}>Analizando producto</div>
             <div style={{fontSize:12,color:'var(--dim)'}}>4 agentes Claude Vision en paralelo</div>
             <div className="agents">
-              {['👁  Visión — producto, marca, estado','📝  SEO — título optimizado','💰  Precio — estimando CLP','🏷️  Categoría — buscando en ML'].map((t,i) => (
-                <div key={i} className="agent"><span className="dot"/>{t}</div>
+              {[
+                { lbl: '👁  Visión — producto, marca, estado' },
+                { lbl: '📝  SEO — título optimizado' },
+                { lbl: '💰  Precio — estimando CLP' },
+                { lbl: '🏷️  Categoría — buscando en ML' }
+              ].map((agent, i) => (
+                <div key={i} className="agent-row">
+                  <span className={`agent-lbl${analysisDone ? ' done' : ''}`}>{agent.lbl}</span>
+                  <div className="agent-bar">
+                    <div className="progress-track">
+                      {analysisDone
+                        ? <div className="progress-fill g" style={{width:'100%'}} />
+                        : <div className="progress-fill shimmer" />
+                      }
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -928,7 +1159,7 @@ export default function App() {
             <div>
               <div style={{fontSize:15,fontWeight:700,marginBottom:4,lineHeight:1.3}}>{analysis.title}</div>
               {analysis.brand && <div style={{fontSize:12,color:'var(--dim)',marginBottom:4}}>{analysis.brand}{analysis.model ? ` · ${analysis.model}` : ''}</div>}
-              <div style={{fontSize:22,fontWeight:700,color:'var(--y)',marginBottom:12}}>${fmt(analysis.price)} CLP</div>
+              <div style={{fontSize:22,fontWeight:700,color:'var(--b)',marginBottom:12}}>${fmt(analysis.price)} CLP</div>
               <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'2px',color:'var(--dim)',marginBottom:8}}>Selecciona la categoría</div>
             </div>
             <div className="cat-list">
@@ -942,12 +1173,12 @@ export default function App() {
                   <span className="arrow">{c.id ? '→' : '✕'}</span>
                 </div>
               )) : (
-                <div style={{textAlign:'center',color:'var(--dim)',padding:20,fontSize:13,background:'var(--s2)',borderRadius:12,border:'1px solid var(--brd)'}}>
+                <div style={{textAlign:'center',color:'var(--dim)',padding:20,fontSize:13,background:'#fff',borderRadius:12,border:'1px solid var(--brd)'}}>
                   No se encontraron categorías
                 </div>
               )}
             </div>
-            {err && <div className="err"><span>⚠</span><span>{err}</span></div>}
+            <ErrMsg e={err} />
             <button className="btn btn-d" style={{width:'100%'}} onClick={() => setScreen(S.PREVIEW)}>← Volver</button>
           </>
         )}
@@ -988,7 +1219,7 @@ export default function App() {
               <div className="f"><label>Precio de venta (CLP)</label>
                 <input className="ei" type="number" min={1} value={editPrice}
                   onChange={e => setEditPrice(parseInt(e.target.value) || 0)}
-                  style={{fontSize:18,fontWeight:700,color:'var(--y)'}} /></div>
+                  style={{fontSize:18,fontWeight:700,color:'var(--b)'}} /></div>
               {compPrices && (
                 <div>
                   <div style={{fontSize:10,color:'var(--dim)',marginBottom:6,textTransform:'uppercase',letterSpacing:'1px'}}>
@@ -1105,7 +1336,10 @@ export default function App() {
               </div>
             )}
 
-            {err && <div className="err"><span>⚠</span><span>{err}</span></div>}
+            <ErrMsg e={err} />
+            <button className="btn btn-d" style={{width:'100%'}} onClick={saveCurrentDraft} disabled={savingDraft}>
+              {savingDraft ? '⟳ Guardando…' : '💾 Guardar como borrador'}
+            </button>
             <button className="btn btn-y" onClick={publish}
               disabled={loadingAttrs || requiredAttrs.some(a => !attrValues[a.id]?.toString().trim())}>
               🚀 Publicar en MercadoLibre
@@ -1119,7 +1353,12 @@ export default function App() {
           <div className="loader">
             <div className="ring"/>
             <div style={{fontSize:16,fontWeight:700}}>Publicando…</div>
-            <div style={{fontSize:12,color:'var(--dim)'}}>Subiendo {imgs.length} imagen{imgs.length > 1 ? 'es' : ''} y creando publicación</div>
+            <div style={{fontSize:12,color:'var(--dim)',marginBottom:8}}>
+              Subiendo imagen {uploadProgress.current} de {uploadProgress.total}…
+            </div>
+            <div className="progress-track" style={{width:'100%'}}>
+              <div className="progress-fill" style={{width: `${Math.round(uploadProgress.current / uploadProgress.total * 100)}%`}} />
+            </div>
           </div>
         )}
 
@@ -1129,7 +1368,7 @@ export default function App() {
             <div className="success">
               <div className="ok">✅</div>
               <div style={{fontSize:20,fontWeight:700}}>¡Publicado!</div>
-              <div style={{fontSize:13,color:'var(--dim)'}}>ID: <code style={{fontFamily:'var(--mono)',color:'var(--y)'}}>{result.id}</code></div>
+              <div style={{fontSize:13,color:'var(--dim)'}}>ID: <code style={{fontFamily:'var(--mono)',color:'var(--b)'}}>{result.id}</code></div>
               {result.permalink && (
                 <div className="pub-link">
                   <a href={result.permalink} target="_blank" rel="noopener noreferrer">{result.permalink}</a>
@@ -1183,6 +1422,80 @@ export default function App() {
                     setHistorial([])
                   }
                 }}>🗑 Borrar historial</button>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ── DRAFTS ── */}
+        {screen === S.DRAFTS && (
+          <>
+            <div className="row" style={{alignItems:'center'}}>
+              <div style={{fontSize:15,fontWeight:700,flex:1}}>📋 Borradores {drafts.length > 0 && `(${drafts.length})`}</div>
+              <button className="btn btn-sm btn-d" onClick={() => setScreen(S.CAMERA)}>← Volver</button>
+            </div>
+
+            {batchProgress && (
+              <div className="panel">
+                <div className="panel-title">Publicando {batchProgress.current}/{batchProgress.total}</div>
+                <div style={{fontSize:13,color:'var(--dim)',marginBottom:8,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{batchProgress.title}</div>
+                <div className="progress-track">
+                  <div className="progress-fill" style={{width: `${Math.round(batchProgress.current / batchProgress.total * 100)}%`}} />
+                </div>
+              </div>
+            )}
+
+            {err && <ErrMsg e={err} />}
+
+            {drafts.length === 0 ? (
+              <div className="empty-hist">📝<br/>No hay borradores guardados.<br/>
+                <span style={{fontSize:12}}>Guarda productos desde la pantalla de confirmación.</span></div>
+            ) : (
+              <>
+                {selectedDrafts.size > 0 && (
+                  <button className="btn btn-y" onClick={publishBatch} disabled={!!batchProgress}>
+                    🚀 Publicar seleccionados ({selectedDrafts.size})
+                  </button>
+                )}
+                <div className="hist-list">
+                  {drafts.map(d => (
+                    <div key={d.id} className="hist-item" style={{cursor:'default'}}>
+                      <input type="checkbox" checked={selectedDrafts.has(d.id)}
+                        onChange={e => setSelectedDrafts(prev => {
+                          const next = new Set(prev)
+                          e.target.checked ? next.add(d.id) : next.delete(d.id)
+                          return next
+                        })}
+                        style={{width:18,height:18,accentColor:'var(--b)',flexShrink:0,cursor:'pointer'}} />
+                      <div className="hist-thumb" onClick={() => loadDraftToConfirm(d)} style={{cursor:'pointer'}}>
+                        {d.thumb
+                          ? <img src={`data:image/jpeg;base64,${d.thumb}`} alt={d.editTitle} />
+                          : <span style={{fontSize:20}}>📦</span>}
+                      </div>
+                      <div className="hist-info" style={{cursor:'pointer'}} onClick={() => loadDraftToConfirm(d)}>
+                        <div className="hist-title">{d.editTitle || 'Sin título'}</div>
+                        <div className="hist-meta">
+                          ${fmt(d.editPrice)} · {d.selCat?.name || ''}<br/>
+                          {new Date(d.created).toLocaleDateString('es-CL', {day:'2-digit',month:'short',year:'numeric'})}
+                        </div>
+                      </div>
+                      <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0}}>
+                        <button className="btn btn-sm btn-d" style={{fontSize:11,padding:'5px 10px'}}
+                          onClick={() => loadDraftToConfirm(d)}>✏️ Editar</button>
+                        <button className="btn btn-sm btn-r" style={{fontSize:11,padding:'5px 10px'}}
+                          onClick={() => { deleteDraft(d.id); setDrafts(loadDrafts()); setSelectedDrafts(p => { const n=new Set(p); n.delete(d.id); return n }) }}>
+                          🗑
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button className="btn btn-r" onClick={() => {
+                  if (window.confirm('¿Borrar todos los borradores?')) {
+                    try { localStorage.removeItem(DRAFTS_KEY) } catch {}
+                    setDrafts([]); setSelectedDrafts(new Set())
+                  }
+                }}>🗑 Borrar todos los borradores</button>
               </>
             )}
           </>
