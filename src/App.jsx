@@ -767,6 +767,9 @@ export default function App() {
         } catch (e) { log('[publish] img err:', e.message) }
         setUploadProgress({ current: i + 1, total: imgs.length })
       }
+      // Evita publicar sin fotos cuando el usuario sí cargó imágenes (todas fallaron al subir).
+      if (imgs.length > 0 && pictures.length === 0)
+        throw new Error('No se pudo subir ninguna foto (revisa tu conexión). La publicación se canceló para no crear un aviso sin imágenes.')
       const attributes = Object.entries(attrValues)
         .filter(([, v]) => v?.toString().trim())
         .map(([id, value_name]) => ({ id, value_name: value_name.toString() }))
@@ -884,6 +887,10 @@ export default function App() {
       const draft = toPublish[i]
       setBatchProgress({ current: i, total: toPublish.length, title: draft.editTitle })
       try {
+        // Validaciones equivalentes a publish() — un borrador incompleto no debe ir a ML.
+        if (!draft.selCat?.id) throw new Error('sin categoría válida')
+        if (!draft.editTitle?.trim()) throw new Error('sin título')
+        if (!draft.editPrice || draft.editPrice < 1) throw new Error('sin precio válido')
         // subir fotos
         const pictures = []
         for (const rawB64 of (draft.imgs || [])) {
@@ -897,6 +904,8 @@ export default function App() {
             if (pr.ok) { const pd = await pr.json(); pictures.push({ id: pd.id }) }
           } catch {}
         }
+        if ((draft.imgs?.length || 0) > 0 && pictures.length === 0)
+          throw new Error('no se pudo subir ninguna foto')
         const attributes = Object.entries(draft.attrValues || {})
           .filter(([, v]) => v?.toString().trim())
           .map(([id, value_name]) => ({ id, value_name: value_name.toString() }))

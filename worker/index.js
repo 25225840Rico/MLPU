@@ -95,7 +95,15 @@ async function getValidAccessToken(env, { force = false } = {}) {
   if (!session?.access_token) throw new Error('No hay sesión ML activa. Re-autoriza en Config.')
   if (force || secsLeft(session) < REFRESH_MARGIN_S) {
     if (!refreshingPromise) {
-      refreshingPromise = refreshSession(env, session).finally(() => { refreshingPromise = null })
+      refreshingPromise = (async () => {
+        // Re-leer KV justo antes de refrescar: otro isolate/celular pudo haber
+        // renovado ya. ML rota el refresh_token, así que un refresh duplicado
+        // invalida la sesión compartida. Si la copia fresca de KV ya está vigente
+        // (y no es un refresh forzado por 401), la reutilizamos en vez de rotar.
+        const fresh = await getSession(env)
+        if (!force && fresh?.access_token && secsLeft(fresh) >= REFRESH_MARGIN_S) return fresh
+        return refreshSession(env, fresh || session)
+      })().finally(() => { refreshingPromise = null })
     }
     session = await refreshingPromise
   }
