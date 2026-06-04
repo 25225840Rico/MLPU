@@ -281,6 +281,9 @@ export default function App() {
   const [tokenObtainedAt, setTokenObtainedAt] = useState(() => Number(LS.get('token_obtained_at')) || null)
   const [tokenTick,     setTokenTick]     = useState(0) // forces re-render for countdown
   const [refreshing,    setRefreshing]    = useState(false)
+  const [authCode,      setAuthCode]      = useState('')
+  const [exchanging,    setExchanging]    = useState(false)
+  const [authErr,       setAuthErr]       = useState('')
 
   const mlBase = useCallback(path => {
     if (proxyUrl) return `${proxyUrl.replace(/\/$/, '')}/ml${path}`
@@ -340,6 +343,44 @@ export default function App() {
       setRefreshing(false)
     }
   }, [refreshToken, clientSecret, appId, mlBase])
+
+  // ── EXCHANGE AUTH CODE → tokens
+  const exchangeCode = useCallback(async () => {
+    if (!authCode.trim() || !secretDraft.trim() || !appId) return
+    setExchanging(true); setAuthErr('')
+    try {
+      // Accept full httpbin URL or bare code
+      let code = authCode.trim()
+      try { code = new URL(code).searchParams.get('code') || code } catch {}
+      const body = new URLSearchParams({
+        grant_type:   'authorization_code',
+        client_id:    appId,
+        client_secret: secretDraft.trim(),
+        code,
+        redirect_uri: 'https://httpbin.org/get'
+      })
+      const r = await fetch(mlBase('/oauth/token'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: body.toString()
+      })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.message || data.error || `HTTP ${r.status}`)
+      const newToken   = data.access_token
+      const newRefresh = data.refresh_token
+      const now = Date.now()
+      // Persist everything
+      LS.set('ml_token', newToken);            setToken(newToken);          setTokenDraft(newToken)
+      LS.set('ml_refresh_token', newRefresh);  setRefreshToken(newRefresh); setRtkDraft(newRefresh)
+      LS.set('ml_client_secret', secretDraft); setClientSecret(secretDraft)
+      LS.set('token_obtained_at', String(now)); setTokenObtainedAt(now)
+      setAuthCode('')
+    } catch (e) {
+      setAuthErr('Error al canjear código: ' + e.message)
+    } finally {
+      setExchanging(false)
+    }
+  }, [authCode, secretDraft, appId, mlBase])
 
   // Countdown tick every 60s + auto-refresh when < 5 min left
   useEffect(() => {
@@ -729,28 +770,48 @@ export default function App() {
         {/* ── ONBOARDING ── */}
         {screen === S.ONBOARDING && (
           <>
+            {/* ── Bloque ML OAuth ── */}
             <div className="card">
-              <h2>Configuración</h2>
-              <div className="f"><label>App ID MercadoLibre</label>
+              <h2>MercadoLibre</h2>
+              <div className="f"><label>App ID</label>
                 <input value={appId} onChange={e => setAppId(e.target.value)} placeholder="3829359465845583" /></div>
+              <div className="f"><label>Client Secret</label>
+                <input type="password" value={secretDraft} onChange={e => setSecretDraft(e.target.value)} placeholder="Tu client_secret" autoComplete="off" /></div>
               <hr />
-              <div className="note">
-                Token: abre <code>auth.mercadolibre.cl/authorization?response_type=code&client_id={appId}&redirect_uri=https://httpbin.org/get</code>, autoriza y canjea el <code>code</code> por token.
+              {/* Paso 1: abrir URL de autorización */}
+              <button className="btn btn-d" style={{width:'100%'}}
+                disabled={!appId || !secretDraft}
+                onClick={() => window.open(`https://auth.mercadolibre.cl/authorization?response_type=code&client_id=${appId}&redirect_uri=https://httpbin.org/get`, '_blank', 'noopener')}>
+                🔐 Paso 1 — Autorizar en MercadoLibre
+              </button>
+              {/* Paso 2: pegar URL de httpbin y canjear */}
+              <div className="f">
+                <label>Paso 2 — Pega la URL de httpbin que te redirigió</label>
+                <input value={authCode} onChange={e => { setAuthCode(e.target.value); setAuthErr('') }}
+                  placeholder="https://httpbin.org/get?code=TG-..." autoComplete="off" />
               </div>
-              <div className="f"><label>Access Token ML</label>
-                <input value={tokenDraft} onChange={e => setTokenDraft(e.target.value)} placeholder="APP_USR-..." autoComplete="off" /></div>
-              <hr />
+              <button className="btn btn-y" disabled={!authCode.trim() || !secretDraft.trim() || exchanging}
+                onClick={exchangeCode}>
+                {exchanging ? '⟳ Canjeando…' : '✓ Canjear código y guardar tokens'}
+              </button>
+              {authErr && <div className="err"><span>⚠</span><span>{authErr}</span></div>}
+              {/* Estado actual del token */}
+              {tokenDraft && (
+                <div className="note" style={{borderColor: tokenColor || 'var(--brd)'}}>
+                  🔑 Token: <code style={{color: tokenColor || 'var(--g)'}}>{tokenDraft.slice(0, 20)}…</code>
+                  {fmtTokenTime(tokenSecsLeft) && <span style={{color: tokenColor}}> · {fmtTokenTime(tokenSecsLeft)} restantes</span>}
+                  {refreshToken && <span style={{color:'var(--g)'}}> · auto-renovación activa ✓</span>}
+                </div>
+              )}
+            </div>
+
+            {/* ── Anthropic + Proxy ── */}
+            <div className="card">
+              <h2>IA y Proxy</h2>
               <div className="f"><label>Anthropic API Key</label>
                 <input type="password" value={anthDraft} onChange={e => setAnthDraft(e.target.value)} placeholder="sk-ant-api03-..." autoComplete="off" /></div>
-              <hr />
               <div className="f"><label>Proxy URL</label>
                 <input value={proxyDraft} onChange={e => setProxyDraft(e.target.value)} placeholder="https://mlpu-proxy.TU.workers.dev" autoComplete="off" /></div>
-              <hr />
-              <div className="f"><label>Client Secret <span style={{color:'var(--dim)',fontWeight:400,fontSize:9}}>(para renovar token)</span></label>
-                <input type="password" value={secretDraft} onChange={e => setSecretDraft(e.target.value)} placeholder="TU_CLIENT_SECRET" autoComplete="off" /></div>
-              <div className="f"><label>Refresh Token <span style={{color:'var(--dim)',fontWeight:400,fontSize:9}}>(se actualiza solo)</span></label>
-                <input type="password" value={rtkDraft} onChange={e => setRtkDraft(e.target.value)} placeholder="TG-..." autoComplete="off" /></div>
-              <div className="note">Con Client Secret + Refresh Token el access token se renueva automáticamente cada 6 h. Obténlos desde el panel de tu app en <code>developers.mercadolibre.cl</code>.</div>
               <div className="note">Datos guardados solo en tu navegador (<code>localStorage</code>).</div>
               <div className="toggle-row" style={{paddingTop:0,paddingBottom:0}}>
                 <div><div className="toggle-label" style={{fontSize:13}}>Sonido metálico</div>
@@ -760,19 +821,16 @@ export default function App() {
                 }} />
               </div>
             </div>
+
             <div className="row">
               <button className="btn btn-d btn-sm" style={{flex:'none',padding:'13px 16px'}}
                 onClick={() => { setHistorial(loadHistory()); setScreen(S.HISTORY) }}>📋 Historial</button>
               <button className="btn btn-y" style={{flex:1}}
                 disabled={!appId || !tokenDraft || !anthDraft}
                 onClick={() => {
-                  LS.set('ml_app_id', appId); LS.set('ml_token', tokenDraft)
-                  LS.set('anthropic_key', anthDraft); LS.set('proxy_url', proxyDraft)
-                  LS.set('ml_client_secret', secretDraft); LS.set('ml_refresh_token', rtkDraft)
-                  const now = Date.now()
-                  if (!tokenObtainedAt) { setTokenObtainedAt(now); LS.set('token_obtained_at', String(now)) }
-                  setToken(tokenDraft); setAnthKey(anthDraft); setProxyUrl(proxyDraft)
-                  setClientSecret(secretDraft); setRefreshToken(rtkDraft)
+                  LS.set('ml_app_id', appId); LS.set('anthropic_key', anthDraft); LS.set('proxy_url', proxyDraft)
+                  LS.set('ml_client_secret', secretDraft)
+                  setAnthKey(anthDraft); setProxyUrl(proxyDraft); setClientSecret(secretDraft)
                   setScreen(S.CAMERA)
                 }}>Comenzar →</button>
             </div>
