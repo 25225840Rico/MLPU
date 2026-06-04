@@ -12,7 +12,7 @@ export default function CropScreen({ imgB64, onCrop, onSkip }) {
   const [natural, setNatural] = useState({ w: 0, h: 0 })
   const [box,     setBox]     = useState({ x: 0, y: 0, w: 0, h: 0 }) // display coords
   const [layout,  setLayout]  = useState({ imgX: 0, imgY: 0, imgW: 0, imgH: 0 }) // image-on-screen rect
-  const [aspect,  setAspect]  = useState('1:1') // '1:1' | '4:3' | '3:4' | 'free'
+  const aspect = '1:1'
 
   const dragRef = useRef(null) // { type, startPX, startPY, startBox }
 
@@ -55,13 +55,6 @@ export default function CropScreen({ imgB64, onCrop, onSkip }) {
     setReady(true)
     computeLayout(natural.w, natural.h, containerRef.current, aspect)
   }, [natural, computeLayout, aspect])
-
-  // recompute on aspect change (keep center)
-  const changeAspect = (asp) => {
-    setAspect(asp)
-    if (!natural.w || !containerRef.current) return
-    computeLayout(natural.w, natural.h, containerRef.current, asp)
-  }
 
   // ── clamp box within image bounds
   const clamp = useCallback((b, lay) => {
@@ -206,14 +199,6 @@ export default function CropScreen({ imgB64, onCrop, onSkip }) {
       paddingBottom: 'max(10px,env(safe-area-inset-bottom))',
       display: 'flex', flexDirection: 'column', gap: 10,
     },
-    aspectRow: {
-      display: 'flex', gap: 8, justifyContent: 'center',
-    },
-    aspBtn: (active) => ({
-      padding: '6px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
-      fontSize: 13, fontWeight: 600,
-      background: active ? '#2563eb' : '#333', color: active ? '#fff' : '#aaa',
-    }),
     actionRow: {
       display: 'flex', gap: 10,
     },
@@ -307,13 +292,6 @@ export default function CropScreen({ imgB64, onCrop, onSkip }) {
 
       {/* controls */}
       <div style={S.bottomBar}>
-        <div style={S.aspectRow}>
-          {[['1:1','□'],['4:3','▭'],['3:4','▯'],['free','✂']].map(([val,lbl]) => (
-            <button key={val} style={S.aspBtn(aspect === val)} onClick={() => changeAspect(val)}>
-              {lbl} {val}
-            </button>
-          ))}
-        </div>
         <div style={{textAlign:'center',color:'#666',fontSize:11}}>{dimLabel}</div>
         <div style={S.actionRow}>
           <button style={S.skipBtn} onClick={onSkip}>Omitir</button>

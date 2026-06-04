@@ -497,7 +497,7 @@ export default function App() {
   const [editPrice,      setEditPrice]      = useState(0)
   const [editDesc,       setEditDesc]       = useState('')
   const [editCondition,  setEditCondition]  = useState('used')
-  const [editQty,        setEditQty]        = useState(1)
+  const [editQty,        setEditQty]        = useState(3)
   const [listingType,    setListingType]    = useState('free')
   const [requiredAttrs,  setRequiredAttrs]  = useState([])
   const [attrValues,     setAttrValues]     = useState({})
@@ -678,7 +678,7 @@ export default function App() {
     setErr(null); setSelCat(cat)
     setEditTitle(analysis?.title || ''); setEditPrice(analysis?.price || 0)
     setEditDesc(analysis?.description || ''); setEditCondition(analysis?.condition || 'used')
-    setEditQty(1); setListingType('free')
+    setEditQty(3); setListingType('free')
     setRequiredAttrs([]); setAttrValues({}); setMissingAttrIds([])
     setCommissions(null); setCompPrices(null); setFreeShipping(false); setLocalPickup(false)
     setScreen(S.CONFIRM)
@@ -699,7 +699,7 @@ export default function App() {
         log('[attrs]', needed.map(a => a.id))
         if (!cancelled) setRequiredAttrs(needed)
         if (needed.length && anthKey && !cancelled) {
-          const filled = await fillAttributesWithAI(needed, analysis, anthKey)
+          const filled = await fillAttributesWithAI(needed, analysis, anthKey, { title: editTitle, description: editDesc, categoryName: selCat?.name })
           if (!cancelled) setAttrValues(filled)
         }
       } catch (e) { log('[attrs]', e.message) }
@@ -1250,7 +1250,9 @@ export default function App() {
                     <option value="new">Nuevo</option><option value="used">Usado</option>
                   </select></div>
                 <div className="f" style={{flex:1}}><label>Cantidad</label>
-                  <input className="ei" type="number" min={1} value={editQty} onChange={e => setEditQty(Math.max(1, parseInt(e.target.value) || 1))} /></div>
+                  <input className="ei" type="number" min={1} value={editQty} onChange={e => setEditQty(Math.max(1, parseInt(e.target.value) || 1))} />
+                  {editQty < 3 && <span style={{fontSize:11,color:'#e6a817'}}>ML recomienda ≥ 3 unidades</span>}
+                </div>
               </div>
               <div className="cat-strip">
                 <div><div style={{fontSize:13,fontWeight:600}}>{selCat.name}</div>

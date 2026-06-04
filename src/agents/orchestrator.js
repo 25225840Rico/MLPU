@@ -92,7 +92,7 @@ export async function analyzeProduct(imageB64, apiKey) {
   return result
 }
 
-export async function fillAttributesWithAI(requiredAttrs, analysis, apiKey) {
+export async function fillAttributesWithAI(requiredAttrs, analysis, apiKey, extra = {}) {
   if (!requiredAttrs?.length || !apiKey) return {}
   const attrList = requiredAttrs.map(a => ({
     id: a.id,
@@ -103,9 +103,24 @@ export async function fillAttributesWithAI(requiredAttrs, analysis, apiKey) {
   try {
     const result = await ask(
       'Atributos',
-      `Eres experto en MercadoLibre Chile. Producto analizado: marca="${analysis.brand||''}", modelo="${analysis.model||''}", tipo="${analysis.product||''}", condición="${analysis.condition||''}".
-Asigna valores para estos atributos requeridos. Si tiene opciones (options), elige UNA de esa lista exactamente. Sin opciones, usa texto libre adecuado.
-Atributos: ${JSON.stringify(attrList)}
+      `Eres experto en MercadoLibre Chile. Analiza el producto y asigna los atributos requeridos.
+
+Datos del producto:
+- Tipo: "${analysis.product||''}"
+- Marca: "${analysis.brand||''}"
+- Modelo: "${analysis.model||''}"
+- Condición: "${analysis.condition||''}"
+- Título ML: "${extra.title||analysis.title||''}"
+- Descripción: "${extra.description||analysis.description||''}"
+- Categoría ML: "${extra.categoryName||''}"
+
+Atributos a completar: ${JSON.stringify(attrList)}
+
+Reglas:
+1. Si el atributo tiene opciones (options), elige EXACTAMENTE una de esa lista (mismo texto, sin variaciones).
+2. Si no tiene opciones, usa texto libre preciso y conciso.
+3. No inventes valores; si no puedes determinarlo con certeza, elige la opción más genérica disponible.
+
 Responde SOLO JSON: {"ID_ATTR": "valor_elegido", "OTRO_ID": "valor"}`,
       null, apiKey
     )
