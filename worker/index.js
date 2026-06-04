@@ -170,7 +170,8 @@ async function handleProxy(request, env, mlPath, search) {
   const bodyBuf = hasBody ? await request.arrayBuffer() : undefined
 
   // endpoints públicos de ML que no requieren auth
-  const PUBLIC_PATHS = ['/sites/', '/currencies/', '/countries/']
+  // /sites/ fue removido — listing_prices sí necesita token para comisiones personalizadas
+  const PUBLIC_PATHS = ['/currencies/', '/countries/']
   const isPublic = PUBLIC_PATHS.some(p => mlPath.startsWith(p))
 
   let token
