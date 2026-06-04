@@ -176,7 +176,7 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .btn-r{background:rgba(220,38,38,.08);color:var(--r);border:1px solid rgba(220,38,38,.25);width:100%}
 .btn-r:hover{background:rgba(220,38,38,.14)}
 .row{display:flex;gap:10px}
-.cam{position:relative;border-radius:20px;overflow:hidden;aspect-ratio:4/3;background:#000;border:2px solid var(--brd);transition:border-color .3s,box-shadow .3s}
+.cam{position:relative;border-radius:20px;overflow:hidden;aspect-ratio:3/4;background:#000;border:2px solid var(--brd);transition:border-color .3s,box-shadow .3s;max-height:70svh}
 .cam.searching{border-color:var(--r);box-shadow:0 0 0 2px rgba(220,38,38,.15)}
 .cam.focused{border-color:var(--g);box-shadow:0 0 0 3px rgba(5,150,105,.2);animation:pulse-g .5s ease}
 @keyframes pulse-g{0%{box-shadow:0 0 0 0 rgba(5,150,105,.4)}100%{box-shadow:0 0 0 12px rgba(5,150,105,0)}}
@@ -225,7 +225,7 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .agent-lbl{font-size:12px;flex:1;color:var(--dim)}
 .agent-lbl.done{color:var(--txt);font-weight:600}
 .agent-bar{width:100px;flex-shrink:0}
-.thumb{border-radius:14px;overflow:hidden;aspect-ratio:4/3;border:1px solid var(--brd)}
+.thumb{border-radius:14px;overflow:hidden;aspect-ratio:3/4;border:1px solid var(--brd)}
 .thumb img{width:100%;height:100%;object-fit:cover}
 .thumb-16{border-radius:14px;overflow:hidden;aspect-ratio:16/9;border:1px solid var(--brd)}
 .thumb-16 img{width:100%;height:100%;object-fit:cover}
@@ -507,7 +507,7 @@ export default function App() {
     setErr(null)
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1920 } }
+        video: { facingMode: 'environment', height: { ideal: 1920 }, aspectRatio: { ideal: 3/4 } }
       })
       try {
         const track = s.getVideoTracks()[0]
@@ -530,7 +530,7 @@ export default function App() {
   const capture = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return
     const v = videoRef.current, c = canvasRef.current
-    c.width = v.videoWidth || 1280; c.height = v.videoHeight || 720
+    c.width = v.videoWidth || 960; c.height = v.videoHeight || 1280
     c.getContext('2d').drawImage(v, 0, 0)
     const b64 = c.toDataURL('image/jpeg', 0.92).split(',')[1]
     addImgs([b64])
