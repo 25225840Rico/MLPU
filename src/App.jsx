@@ -304,6 +304,9 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .warn{background:var(--yb);border:1px solid rgba(245,158,11,.25);border-radius:10px;padding:10px 13px;font-size:12px;color:var(--y)}
 hr{border:none;border-top:1px solid var(--brd)}
 ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:var(--brd);border-radius:2px}
+@keyframes eggFadeIn { from { opacity:0; transform:scale(0.95) } to { opacity:1; transform:scale(1) } }
+@keyframes eggFloat { 0% { transform:translateY(0) rotate(-10deg); opacity:0 } 10% { opacity:0.85 } 90% { opacity:0.5 } 100% { transform:translateY(-110vh) rotate(10deg); opacity:0 } }
+@keyframes eggPulse { 0%,100% { transform:scale(1) } 50% { transform:scale(1.06) } }
 .hist-list{display:flex;flex-direction:column;gap:10px}
 .hist-item{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--brd);border-radius:13px;padding:11px 13px;cursor:pointer;transition:border-color .12s}
 .hist-item:hover{border-color:var(--b)}
@@ -314,6 +317,9 @@ hr{border:none;border-top:1px solid var(--brd)}
 .hist-meta{font-size:11px;color:var(--dim);margin-top:2px;line-height:1.5}
 .hist-gain{font-size:12px;font-weight:700;color:var(--g);font-family:var(--mono)}
 .empty-hist{text-align:center;padding:40px 20px;color:var(--dim);font-size:13px;background:#fff;border-radius:16px;border:1px solid var(--brd);line-height:2}
+.sticky-cta{position:sticky;bottom:0;z-index:5;display:flex;flex-direction:column;gap:8px;padding:12px 0 max(10px,env(safe-area-inset-bottom));margin:0 -2px;background:linear-gradient(180deg,rgba(245,247,254,0) 0%,var(--bg) 28%)}
+.cta-hint{font-size:11px;color:var(--y);text-align:center;font-weight:600;margin-bottom:2px}
+.copy-link{display:flex;gap:8px;width:100%}
 `
 
 const LS = {
@@ -327,10 +333,13 @@ function PhotoStrip({ imgs, onReorder, onDelete, onAdd, showAdd = true }) {
   return (
     <div className="photo-strip">
       {imgs.map((b64, i) => (
-        <div key={i} className={`pthumb${i === 0 ? ' main' : ''}`} onClick={() => i !== 0 && onReorder(i)}>
-          <img src={`data:image/jpeg;base64,${b64}`} alt="" />
+        <div key={i} className={`pthumb${i === 0 ? ' main' : ''}`} role="button"
+          title={i === 0 ? 'Foto principal' : 'Tocar para fijar como principal'}
+          onClick={() => i !== 0 && onReorder(i)}>
+          <img src={`data:image/jpeg;base64,${b64}`} alt={i === 0 ? 'Foto principal' : `Foto ${i + 1}`} />
           {i === 0 && <div className="mb">PRINCIPAL</div>}
-          <div className="del" onClick={e => { e.stopPropagation(); onDelete(i) }}>✕</div>
+          <div className="del" role="button" aria-label="Eliminar foto"
+            onClick={e => { e.stopPropagation(); onDelete(i) }}>✕</div>
         </div>
       ))}
       {showAdd && imgs.length < 8 && (
@@ -470,6 +479,26 @@ export default function App() {
 
   // ── PUBLISHING progress
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 1 })
+
+  // ── SUCCESS: feedback al copiar link
+  const [linkCopied, setLinkCopied] = useState(false)
+  const copyPermalink = useCallback(async (url) => {
+    if (!url) return
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(url)
+      else {
+        const ta = document.createElement('textarea')
+        ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0'
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove()
+      }
+      setLinkCopied(true); setTimeout(() => setLinkCopied(false), 2000)
+    } catch {}
+  }, [])
+
+  // ── EASTER EGG
+  const [eggTaps,   setEggTaps]   = useState(0)
+  const [showEgg,   setShowEgg]   = useState(false)
+  const eggTimerRef = useRef(null)
 
   // ── DRAFTS
   const [drafts,         setDrafts]         = useState(() => loadDrafts())
@@ -713,6 +742,8 @@ export default function App() {
   // ── PUBLISH
   const publish = useCallback(async () => {
     if (!selCat?.id || !analysis) return
+    if (!editTitle.trim()) { setErr('El título no puede estar vacío.'); return }
+    if (!editPrice || editPrice < 1) { setErr('Ingresa un precio válido mayor a $0.'); return }
     const missing = requiredAttrs.filter(a => !attrValues[a.id]?.toString().trim())
     if (missing.length) {
       setMissingAttrIds(missing.map(a => a.id))
@@ -956,7 +987,17 @@ export default function App() {
         {/* TOP BAR */}
         <div className="top">
           <span className="logo">ML</span>
-          <h1>Auto<em>Publisher</em></h1>
+          <h1 onClick={() => {
+            const next = eggTaps + 1
+            if (eggTimerRef.current) clearTimeout(eggTimerRef.current)
+            if (next >= 7) {
+              setShowEgg(true); setEggTaps(0)
+              setTimeout(() => setShowEgg(false), 8000)
+            } else {
+              setEggTaps(next)
+              eggTimerRef.current = setTimeout(() => setEggTaps(0), 4000)
+            }
+          }}>Auto<em>Publisher</em></h1>
           {sessionActive && fmtTokenTime(sessionSecsLeft) && (
             <span className="cnt" style={{color: tokenColor, borderColor: tokenColor, cursor: 'pointer'}}
               onClick={fetchAuthStatus}>
@@ -1015,7 +1056,7 @@ export default function App() {
               <div className="toggle-row" style={{paddingTop:0,paddingBottom:0}}>
                 <div><div className="toggle-label" style={{fontSize:13}}>Sonido metálico</div>
                   <div className="toggle-sub">Beep al capturar y al publicar</div></div>
-                <button className={`toggle${soundOn ? ' on' : ''}`} onClick={() => {
+                <button className={`toggle${soundOn ? ' on' : ''}`} role="switch" aria-checked={soundOn} aria-label="Sonido metálico" onClick={() => {
                   const v = !soundOn; setSoundOn(v); LS.set('sound_on', String(v))
                 }} />
               </div>
@@ -1087,6 +1128,7 @@ export default function App() {
                     <div style={{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'var(--dim)'}}>
                       Auto-foco
                       <button className={`toggle${autoCapture ? ' on' : ''}`} style={{width:34,height:20}}
+                        role="switch" aria-checked={autoCapture} aria-label="Auto-foco"
                         onClick={() => { setAutoCapture(v => !v); focusCount.current = 0; setBorderState(v => v !== 'neutral' ? 'neutral' : v) }} />
                     </div>
                     <button className="btn btn-sm btn-d" onClick={() => fileRef.current?.click()}>📁 + Fotos</button>
@@ -1118,7 +1160,10 @@ export default function App() {
               ⚡ Analizar con IA{imgs.length > 1 ? ` (${imgs.length} fotos)` : ''}
             </button>
             <div className="row">
-              <button className="btn btn-d" onClick={() => { setImgs([]); startCam() }}>🔄 Repetir</button>
+              <button className="btn btn-d" onClick={() => {
+                if (imgs.length > 1 && !window.confirm(`Se descartarán las ${imgs.length} fotos actuales. ¿Continuar?`)) return
+                setImgs([]); startCam()
+              }}>🔄 Repetir</button>
               <button className="btn btn-d" onClick={() => fileRef.current?.click()}>📁 Agregar</button>
               <input ref={fileRef} type="file" accept="image/*" multiple style={{display:'none'}} onChange={e => handleFiles(e.target.files)} />
             </div>
@@ -1203,7 +1248,7 @@ export default function App() {
                   </select></div>
                 <div className="f" style={{flex:1}}><label>Cantidad</label>
                   <input className="ei" type="number" min={1} value={editQty} onChange={e => setEditQty(Math.max(1, parseInt(e.target.value) || 1))} />
-                  {editQty < 3 && <span style={{fontSize:11,color:'#e6a817'}}>ML recomienda ≥ 3 unidades</span>}
+                  {editQty < 3 && <span style={{fontSize:11,color:'var(--y)'}}>ML recomienda ≥ 3 unidades</span>}
                 </div>
               </div>
               <div className="cat-strip">
@@ -1291,7 +1336,7 @@ export default function App() {
               <div className="toggle-row">
                 <div><div className="toggle-label">Envío gratis</div>
                   <div className="toggle-sub">El vendedor asume el costo (~${fmt(shippingCost)} CLP)</div></div>
-                <button className={`toggle${freeShipping ? ' on' : ''}`} onClick={() => setFreeShipping(v => !v)} />
+                <button className={`toggle${freeShipping ? ' on' : ''}`} role="switch" aria-checked={freeShipping} aria-label="Envío gratis" onClick={() => setFreeShipping(v => !v)} />
               </div>
               {freeShipping && (
                 <div className="f"><label>Costo estimado de envío (CLP)</label>
@@ -1300,7 +1345,7 @@ export default function App() {
               )}
               <div className="toggle-row" style={{borderTop:'1px solid var(--brd)',paddingTop:9}}>
                 <div><div className="toggle-label">Retiro en persona</div></div>
-                <button className={`toggle${localPickup ? ' on' : ''}`} onClick={() => setLocalPickup(v => !v)} />
+                <button className={`toggle${localPickup ? ' on' : ''}`} role="switch" aria-checked={localPickup} aria-label="Retiro en persona" onClick={() => setLocalPickup(v => !v)} />
               </div>
             </div>
 
@@ -1342,14 +1387,31 @@ export default function App() {
             )}
 
             <ErrMsg e={err} />
-            <button className="btn btn-d" style={{width:'100%'}} onClick={saveCurrentDraft} disabled={savingDraft}>
-              {savingDraft ? '⟳ Guardando…' : '💾 Guardar como borrador'}
-            </button>
-            <button className="btn btn-y" onClick={publish}
-              disabled={loadingAttrs || requiredAttrs.some(a => !attrValues[a.id]?.toString().trim())}>
-              🚀 Publicar en MercadoLibre
-            </button>
-            <button className="btn btn-d" style={{width:'100%'}} onClick={() => setScreen(S.CATEGORIES)}>← Categoría</button>
+            {(() => {
+              const missingAttrs = requiredAttrs.filter(a => !attrValues[a.id]?.toString().trim())
+              const noTitle = !editTitle.trim()
+              const noPrice = !editPrice || editPrice < 1
+              const blocked = loadingAttrs || missingAttrs.length > 0 || noTitle || noPrice
+              const hint = loadingAttrs ? 'Cargando atributos…'
+                : noTitle ? 'Falta el título'
+                : noPrice ? 'Falta un precio válido'
+                : missingAttrs.length ? `Faltan ${missingAttrs.length} atributo${missingAttrs.length > 1 ? 's' : ''} requerido${missingAttrs.length > 1 ? 's' : ''}`
+                : ''
+              return (
+                <div className="sticky-cta">
+                  {blocked && hint && <div className="cta-hint">⚠ {hint}</div>}
+                  <button className="btn btn-y" onClick={publish} disabled={blocked}>
+                    🚀 Publicar en MercadoLibre
+                  </button>
+                  <div className="row">
+                    <button className="btn btn-d" onClick={saveCurrentDraft} disabled={savingDraft}>
+                      {savingDraft ? '⟳ Guardando…' : '💾 Borrador'}
+                    </button>
+                    <button className="btn btn-d" onClick={() => setScreen(S.CATEGORIES)}>← Categoría</button>
+                  </div>
+                </div>
+              )
+            })()}
           </>
         )}
 
@@ -1379,9 +1441,24 @@ export default function App() {
                   <a href={result.permalink} target="_blank" rel="noopener noreferrer">{result.permalink}</a>
                 </div>
               )}
+              {result.permalink && (
+                <div className="copy-link">
+                  <button className="btn btn-d" style={{flex:1}}
+                    onClick={() => copyPermalink(result.permalink)}>
+                    {linkCopied ? '✓ Link copiado' : '📋 Copiar link'}
+                  </button>
+                  <button className="btn btn-d" style={{flex:1}}
+                    onClick={() => window.open(result.permalink, '_blank', 'noopener')}>
+                    🔗 Abrir
+                  </button>
+                </div>
+              )}
             </div>
             <button className="btn btn-y" onClick={reset}>📷 Publicar otro</button>
-            <button className="btn btn-d" style={{width:'100%'}} onClick={() => setScreen(S.ONBOARDING)}>⚙ Config</button>
+            <div className="row">
+              <button className="btn btn-d" style={{flex:1}} onClick={() => { setHistorial(loadHistory()); setScreen(S.HISTORY) }}>📋 Historial</button>
+              <button className="btn btn-d" style={{flex:1}} onClick={() => setScreen(S.ONBOARDING)}>⚙ Config</button>
+            </div>
           </>
         )}
 
@@ -1513,6 +1590,51 @@ export default function App() {
           onPhotoCaptured={onFsPhotoCaptured}
           onClose={() => setShowFsCam(false)}
         />
+      )}
+
+      {showEgg && (
+        <div onClick={() => setShowEgg(false)} style={{
+          position:'fixed', inset:0, zIndex:9999,
+          background:'linear-gradient(135deg,#0d0d1a 0%,#1a0a2e 50%,#0d0d1a 100%)',
+          display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+          animation:'eggFadeIn 0.5s ease',
+          overflow:'hidden', cursor:'pointer'
+        }}>
+          {[...Array(12)].map((_,i) => (
+            <div key={i} style={{
+              position:'absolute',
+              left: `${[8,18,30,42,55,65,75,85,12,48,70,35][i]}%`,
+              bottom:'-10%',
+              fontSize: `${[24,18,32,20,28,16,36,22,26,30,18,24][i]}px`,
+              animation: `eggFloat ${[4,5,3.5,4.5,3,5.5,4,3.8,5,4.2,3.5,4.8][i]}s ${[0,0.5,1,0.3,1.5,0.8,0.2,1.2,0.6,1.8,0.4,1.0][i]}s ease-in infinite`,
+              opacity:0.85
+            }}>❤️</div>
+          ))}
+          <div style={{textAlign:'center', padding:'0 24px', position:'relative', zIndex:1}}>
+            <div style={{fontSize:14,letterSpacing:6,color:'#ff6b9d',textTransform:'uppercase',marginBottom:8,opacity:0.8}}>
+              con todo mi amor
+            </div>
+            <div style={{
+              fontSize:38, fontWeight:900, color:'#fff',
+              textShadow:'0 0 40px #ff6b9d, 0 0 80px #c44dff',
+              letterSpacing:2, lineHeight:1.1, marginBottom:8,
+              animation:'eggPulse 2s ease-in-out infinite'
+            }}>
+              Paola<br/>Bilotta
+            </div>
+            <div style={{fontSize:28, margin:'12px 0', animation:'eggPulse 1.5s ease-in-out infinite'}}>
+              💕
+            </div>
+            <div style={{fontSize:16, color:'#ffb3d1', maxWidth:280, lineHeight:1.6, margin:'0 auto'}}>
+              Eres la mejor mujer del mundo.<br/>
+              Gracias por estar a mi lado.<br/>
+              Te amo con todo.
+            </div>
+            <div style={{marginTop:20, fontSize:13, color:'rgba(255,179,209,0.5)'}}>
+              ✨ Sigue adelante — eres increíble ✨
+            </div>
+          </div>
+        </div>
       )}
     </>
   )
