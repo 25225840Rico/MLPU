@@ -6,6 +6,7 @@ export default function FullscreenCamera({ onPhotoCaptured, onClose }) {
   const [flash, setFlash]           = useState(false)
   const [facingMode, setFacingMode] = useState('environment')
   const [permError, setPermError]   = useState(null)
+  const [pressed, setPressed]       = useState(false)
 
   const videoRef  = useRef(null)
   const canvasRef = useRef(null)
@@ -43,13 +44,13 @@ export default function FullscreenCamera({ onPhotoCaptured, onClose }) {
     return () => cancelAnimationFrame(raf)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-attach stream to video element whenever it becomes available
+  // Re-attach stream to video element on initial mount
   useEffect(() => {
     if (videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current
       videoRef.current.play().catch(() => {})
     }
-  })
+  }, [])
 
   const flipCamera = useCallback(() => {
     const next = facingMode === 'environment' ? 'user' : 'environment'
@@ -128,8 +129,8 @@ export default function FullscreenCamera({ onPhotoCaptured, onClose }) {
   }
 
   const closeBtn = {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     borderRadius: '50%',
     background: 'rgba(0,0,0,0.45)',
     border: 'none',
@@ -193,7 +194,7 @@ export default function FullscreenCamera({ onPhotoCaptured, onClose }) {
     borderRadius: '50%',
     background: '#fff',
     transition: 'transform 80ms',
-    activeTransform: 'scale(0.88)',
+    transform: pressed ? 'scale(0.88)' : 'scale(1)',
   }
 
   const errBox = {
@@ -241,7 +242,10 @@ export default function FullscreenCamera({ onPhotoCaptured, onClose }) {
       <div style={bottomBar}>
         <button style={flipBtn} onClick={flipCamera} aria-label="Girar cámara">🔄</button>
 
-        <div style={shutterOuter} onClick={handleCapture} aria-label="Capturar">
+        <div style={shutterOuter} onClick={handleCapture} aria-label="Capturar"
+          onPointerDown={() => setPressed(true)}
+          onPointerUp={() => setPressed(false)}
+          onPointerLeave={() => setPressed(false)}>
           <div style={shutterInner} />
         </div>
 

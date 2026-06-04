@@ -139,6 +139,29 @@ async function compressToThumb(b64, maxW = 120) {
   })
 }
 
+async function cropSquareForML(b64, size = 1200) {
+  return new Promise(res => {
+    const img = new Image()
+    const to = setTimeout(() => res(b64), 3000)
+    img.onload = () => {
+      clearTimeout(to)
+      try {
+        const side = Math.min(img.width, img.height)
+        const c = document.createElement('canvas')
+        c.width = size; c.height = size
+        const ctx = c.getContext('2d')
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, size, size)
+        const sx = (img.width - side) / 2, sy = (img.height - side) / 2
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size)
+        res(c.toDataURL('image/jpeg', 0.88).split(',')[1])
+      } catch { res(b64) }
+    }
+    img.onerror = () => { clearTimeout(to); res(b64) }
+    img.src = 'data:image/jpeg;base64,' + b64
+  })
+}
+
 const fmt = n => Number(n || 0).toLocaleString('es-CL')
 
 const css = `
@@ -230,6 +253,8 @@ body{background:var(--bg);color:var(--txt);font-family:'Space Grotesk',sans-seri
 .thumb img{width:100%;height:100%;object-fit:cover}
 .thumb-16{border-radius:14px;overflow:hidden;aspect-ratio:16/9;border:1px solid var(--brd)}
 .thumb-16 img{width:100%;height:100%;object-fit:cover}
+.thumb-sq{border-radius:14px;overflow:hidden;aspect-ratio:1/1;border:1px solid var(--brd)}
+.thumb-sq img{width:100%;height:100%;object-fit:cover}
 .cat-list{display:flex;flex-direction:column;gap:8px}
 .cat-item{background:#fff;border:1px solid var(--brd);border-radius:13px;padding:13px 15px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;transition:all .12s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
 .cat-item:hover{border-color:var(--b);background:var(--bb)}
@@ -314,7 +339,7 @@ function PhotoStrip({ imgs, onReorder, onDelete, onAdd, showAdd = true }) {
 }
 
 export default function App() {
-  const [screen,      setScreen]      = useState(S.ONBOARDING)
+  const [screen,      setScreen]      = useState(() => (LS.get('ml_token') && LS.get('anthropic_key')) ? S.CAMERA : S.ONBOARDING)
   const [appId,       setAppId]       = useState(() => LS.get('ml_app_id')    || '3829359465845583')
   const [token,       setToken]       = useState(() => LS.get('ml_token')      || '')
   const [tokenDraft,  setTokenDraft]  = useState(() => LS.get('ml_token')      || '')
@@ -745,7 +770,7 @@ export default function App() {
     try {
       const pictures = []
       for (let i = 0; i < imgs.length; i++) {
-        const imgB64 = imgs[i]
+        const imgB64 = await cropSquareForML(imgs[i])
         try {
           const blob = await (await fetch(`data:image/jpeg;base64,${imgB64}`)).blob()
           const form = new FormData(); form.append('file', blob, 'product.jpg')
@@ -876,7 +901,8 @@ export default function App() {
       try {
         // subir fotos
         const pictures = []
-        for (const imgB64 of (draft.imgs || [])) {
+        for (const rawB64 of (draft.imgs || [])) {
+          const imgB64 = await cropSquareForML(rawB64)
           try {
             const blob = await (await fetch(`data:image/jpeg;base64,${imgB64}`)).blob()
             const form = new FormData(); form.append('file', blob, 'product.jpg')
@@ -1111,7 +1137,7 @@ export default function App() {
               )}
             </div>
             <ErrMsg e={err} />
-            <button className="btn btn-d" style={{width:'100%',fontSize:12}} onClick={() => setScreen(S.ONBOARDING)}>⚙ Config</button>
+            <button className="btn btn-d" style={{width:'100%',fontSize:12}} onClick={() => { stopCam(); setScreen(S.ONBOARDING) }}>⚙ Config</button>
           </>
         )}
 
@@ -1195,7 +1221,7 @@ export default function App() {
         {/* ── CONFIRM ── */}
         {screen === S.CONFIRM && analysis && selCat && (
           <>
-            <div className="thumb-16"><img src={`data:image/jpeg;base64,${imgs[0]}`} alt="producto"/></div>
+            <div className="thumb-sq"><img src={`data:image/jpeg;base64,${imgs[0]}`} alt="producto"/></div>
             <div className="panel">
               <div className="panel-title">Publicación</div>
               <div className="f"><label>Título <span style={{color:'var(--dim)',fontWeight:400}}>(máx 60)</span></label>
