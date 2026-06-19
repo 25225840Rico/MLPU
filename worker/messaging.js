@@ -45,10 +45,15 @@ export async function uploadAttachment(env, token, bytes, filename = 'foto.jpg',
 }
 
 /**
- * Envía un mensaje de texto (y opcionalmente adjuntos) al comprador de un pack.
- * No lanza excepción: siempre devuelve { ok, error? }.
+ * POST clásico a /messages. Sirve cuando la conversación ya está abierta
+ * (el comprador escribió primero) o cuando el mensaje lleva adjuntos.
+ * No lanza: devuelve { ok, error?, blocked?, status? }.
+ *
+ * `blocked` indica que ML rechazó el INICIO de la conversación por política
+ * de vendedor (sustatus blocked_by_conversation_initiated_by_seller_limited),
+ * lo que dispara el fallback al Action Guide.
  */
-export async function sendBuyerMessage(env, token, { packId, sellerId, buyerId, text, attachments = [] }) {
+async function postClassicMessage(env, token, { packId, sellerId, buyerId, text, attachments = [] }) {
   try {
     const body = {
       from: { user_id: sellerId },
@@ -71,14 +76,123 @@ export async function sendBuyerMessage(env, token, { packId, sellerId, buyerId, 
 
     if (!res.ok) {
       const msg = data?.message || data?.error || `HTTP ${res.status}`
-      throw new Error(msg)
+      const blocked = res.status === 403 ||
+        /block|initiated_by_seller|not_allowed|cap_exceeded|limit/i.test(JSON.stringify(data || ''))
+      return { ok: false, error: msg, blocked, status: res.status }
     }
 
-    return { ok: true }
+    return { ok: true, via: 'messages' }
   } catch (err) {
-    logErr('sendBuyerMessage falló:', err.message || err)
+    logErr('postClassicMessage falló:', err.message || err)
     return { ok: false, error: err.message || String(err) }
   }
+}
+
+/**
+ * GET de las opciones del Action Guide ("motivos para comunicarse") que ML
+ * habilita para INICIAR una conversación post-venta en un pack. Devuelve el
+ * array de opciones o null si no aplica / falla.
+ */
+async function getActionGuideOptions(env, token, packId) {
+  try {
+    const res = await fetch(`${API_BASE}/messages/action_guide/packs/${packId}?tag=post_sale`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    return Array.isArray(data?.options) ? data.options : null
+  } catch (err) {
+    logErr('getActionGuideOptions falló:', err.message || err)
+    return null
+  }
+}
+
+/**
+ * POST de una opción del Action Guide (texto libre OTHER o plantilla).
+ * No lanza: devuelve { ok, error?, status? }.
+ */
+async function postActionGuideOption(env, token, packId, payload) {
+  try {
+    const res = await fetch(`${API_BASE}/messages/action_guide/packs/${packId}/option?tag=post_sale`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+
+    let data = null
+    try { data = await res.json() } catch { /* respuesta no-JSON, se ignora */ }
+
+    if (!res.ok) {
+      const msg = data?.message || data?.error || `HTTP ${res.status}`
+      return { ok: false, error: msg, status: res.status }
+    }
+
+    return { ok: true, via: 'action_guide' }
+  } catch (err) {
+    logErr('postActionGuideOption falló:', err.message || err)
+    return { ok: false, error: err.message || String(err) }
+  }
+}
+
+/**
+ * Envía un mensaje de texto (y opcionalmente adjuntos) al comprador de un pack.
+ * No lanza excepción: siempre devuelve { ok, error?, via?, need_buyer_reply? }.
+ *
+ * MercadoLibre BLOQUEA que un vendedor nuevo / con Mercado Envíos INICIE la
+ * conversación con un POST directo a /messages (substatus
+ * blocked_by_conversation_initiated_by_seller_limited). La forma oficial de
+ * iniciar es vía el Action Guide: se elige un "motivo para comunicarse"
+ * (opción FREE_TEXT "OTHER", límite 350 chars, con cupo cap_available). Una vez
+ * que el comprador responde, la conversación se desbloquea y vuelve a servir el
+ * endpoint clásico (sin cupo).
+ *
+ * Estrategia:
+ *   - Con adjuntos → endpoint clásico (el Action Guide es solo texto).
+ *   - Si hay opción FREE_TEXT con cupo → enviar por Action Guide (texto truncado
+ *     a su char_limit).
+ *   - Si el cupo está agotado → intentar el clásico (por si el comprador ya
+ *     respondió); si no, devolver error claro `need_buyer_reply`.
+ *   - Si no hay gating de Action Guide → endpoint clásico.
+ */
+export async function sendBuyerMessage(env, token, { packId, sellerId, buyerId, text, attachments = [] }) {
+  // Adjuntos (fotos de evidencia): el Action Guide no transporta archivos.
+  if (attachments.length) {
+    return postClassicMessage(env, token, { packId, sellerId, buyerId, text, attachments })
+  }
+
+  const options = await getActionGuideOptions(env, token, packId)
+  const freeText = options?.find(o => o.type === 'FREE_TEXT' && o.enabled && o.actionable)
+
+  if (freeText) {
+    if ((freeText.cap_available ?? 0) >= 1) {
+      const limit = freeText.char_limit || 350
+      const body = text.length > limit ? text.slice(0, limit) : text
+      const r = await postActionGuideOption(env, token, packId, { option_id: freeText.id, text: body })
+      if (r.ok) {
+        log(`Mensaje enviado vía Action Guide (${freeText.id}) al pack ${packId}`)
+        return r
+      }
+      // Falló el Action Guide: probamos el clásico por si la conversación ya está abierta.
+      logErr('Action Guide falló, intento clásico:', r.error)
+      const c = await postClassicMessage(env, token, { packId, sellerId, buyerId, text })
+      return c.ok ? c : { ok: false, error: r.error || c.error }
+    }
+    // Cupo de inicio agotado: ML exige que el comprador responda antes de otro
+    // mensaje. Igual probamos el clásico (si el comprador ya respondió, abre).
+    const c = await postClassicMessage(env, token, { packId, sellerId, buyerId, text })
+    if (c.ok) return c
+    return {
+      ok: false,
+      need_buyer_reply: true,
+      error: 'ML no permite otro mensaje hasta que el comprador responda (cupo de inicio agotado).',
+    }
+  }
+
+  // Sin gating de Action Guide (conversación abierta o envío no aplicable).
+  return postClassicMessage(env, token, { packId, sellerId, buyerId, text })
 }
 
 /**

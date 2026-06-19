@@ -25,15 +25,23 @@ const HOURS_48_MS = 48 * 3600 * 1000
 // CTA persuasivo que se envía al comprador apenas el pedido queda ENTREGADO:
 // busca convertir al cliente en seguidor de Instagram y que suba una historia
 // con su producto (prueba social orgánica). Editá el texto acá si querés.
+// Mensaje ≤350 caracteres: la opción FREE_TEXT del Action Guide tiene
+// char_limit 350. Sin HTML (esto va a la mensajería de ML, no a Telegram).
 function igStoryCta(nombre) {
   return (
-    `¡Hola ${nombre}! 🏁 Tu pedido de <b>TopWheels</b> ya llegó 🔥 Esperamos que te encante.\n\n` +
-    `¿Nos das una mano de 30 segundos? 🙌\n` +
-    `1️⃣ Síguenos en Instagram 👉 @topwheels.cl\n` +
-    `2️⃣ Sube una historia mostrando tu nueva pieza y etiquétanos @topwheels.cl 📸\n\n` +
-    `🏆 Reposteamos las mejores historias y entre quienes nos etiquetan sorteamos modelos todos los meses. ` +
-    `¡Súmate a la comunidad de coleccionistas y muestra tu colección! 🚗💨 Gracias por elegirnos.`
+    `¡Hola ${nombre}! 🏁 Tu pedido de TopWheels ya llegó 🔥 Esperamos que te encante.\n\n` +
+    `¿Nos ayudas con 30 segundos? Síguenos en Instagram @topwheels.cl y sube una historia con tu pieza etiquetándonos 📸\n\n` +
+    `Sorteamos modelos entre quienes nos etiquetan. ¡Gracias por elegirnos! 🚗`
   )
+}
+
+// Línea de estado del envío al comprador para los avisos de Telegram.
+// Distingue éxito, bloqueo por política de ML (cupo de inicio agotado) y error.
+function msgStatusLine(res) {
+  if (res?.ok) return '✅ Mensaje entregado al comprador.'
+  if (res?.need_buyer_reply)
+    return '⏸️ ML no deja iniciar otro mensaje (cupo agotado). Queda pendiente hasta que el comprador responda; lo reintento solo.'
+  return `⚠️ No se pudo enviar al comprador: ${res?.error || 'error desconocido'}`
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -148,35 +156,59 @@ export async function runScheduled(env) {
       const status = shipment.status
 
       // ── Transición: en camino ──────────────────────────────
-      if (status === 'shipped' && !rec.shipped_notified) {
-        if (sellerId === null) sellerId = await fetchSellerId(token)
-        const fechaEstimada = estimatedDeliveryText(shipment)
-
-        const msgRes = await sendBuyerMessage(env, token, {
-          packId:   rec.pack_id || rec.order_id,
-          sellerId,
-          buyerId:  rec.buyer_id,
-          text:     `Tu pedido está en camino 🚚, llegada estimada: ${fechaEstimada}.`,
-        })
-        if (!msgRes?.ok) logErr('sendBuyerMessage (shipped) falló para orden', rec.order_id, msgRes?.error)
-
-        await tgSend(env, env.TELEGRAM_CHAT_ID,
-          `🚚 Orden <code>${rec.order_id}</code> en camino (${rec.buyer_name}).`)
-
-        rec.shipped_notified = true
-        await saveOrder(env, rec)
+      // FIX A/B: el flag de "mensaje al comprador" se separa del aviso al
+      // vendedor y SOLO se marca cuando el mensaje realmente salió; si ML lo
+      // bloquea (cupo OTHER agotado) se reintenta en la próxima corrida y se
+      // avisa al vendedor una sola vez. Así no se pierde el mensaje en silencio.
+      if (status === 'shipped') {
+        // Aviso al vendedor: una sola vez.
+        if (!rec.shipped_notified) {
+          await tgSend(env, env.TELEGRAM_CHAT_ID,
+            `🚚 Orden <code>${rec.order_id}</code> en camino (${rec.buyer_name}).`)
+          rec.shipped_notified = true
+          await saveOrder(env, rec)
+        }
+        // Mensaje al comprador: reintentar hasta que ML lo acepte.
+        if (!rec.shipped_msg_sent) {
+          if (sellerId === null) sellerId = await fetchSellerId(token)
+          const fechaEstimada = estimatedDeliveryText(shipment)
+          const msgRes = await sendBuyerMessage(env, token, {
+            packId:   rec.pack_id || rec.order_id,
+            sellerId,
+            buyerId:  rec.buyer_id,
+            text:     `Tu pedido está en camino 🚚, llegada estimada: ${fechaEstimada}.`,
+          })
+          rec.shipped_msg_sent = !!msgRes?.ok
+          if (msgRes?.ok) {
+            rec.shipped_msg_warned = false
+            await tgSend(env, env.TELEGRAM_CHAT_ID,
+              `📨 Orden <code>${rec.order_id}</code> (en camino): ${msgStatusLine(msgRes)}`)
+          } else {
+            logErr('sendBuyerMessage (shipped) falló para orden', rec.order_id, msgRes?.error)
+            if (!rec.shipped_msg_warned) {
+              await tgSend(env, env.TELEGRAM_CHAT_ID,
+                `📨 Orden <code>${rec.order_id}</code> (en camino): ${msgStatusLine(msgRes)}`)
+              rec.shipped_msg_warned = true
+            }
+          }
+          await saveOrder(env, rec)
+        }
       }
 
       // ── Transición: entregado ──────────────────────────────
       if (status === 'delivered') {
+        // 1) Registrar la entrega una sola vez (arranca el reloj de 48 h).
         if (!rec.delivered_at) {
           rec.delivered_at = Date.now()
           rec.delivered_notified = true
+          await tgSend(env, env.TELEGRAM_CHAT_ID,
+            `📬 Orden <code>${rec.order_id}</code> ENTREGADA (${rec.buyer_name}).`)
+          await saveOrder(env, rec)
+        }
 
-          // Mensaje persuasivo al comprador: seguir en Instagram + subir historia
-          // con el producto (prueba social orgánica). Se manda 1 sola vez.
+        // 2) CTA de Instagram al comprador: reintentar hasta que salga.
+        if (!rec.ig_cta_sent) {
           if (sellerId === null) sellerId = await fetchSellerId(token)
-          // Solo el primer nombre real (del destinatario del envío).
           const nombreIg = firstName(shipment?.receiver_address?.receiver_name || rec.buyer_name)
           const ctaRes = await sendBuyerMessage(env, token, {
             packId:   rec.pack_id || rec.order_id,
@@ -184,42 +216,70 @@ export async function runScheduled(env) {
             buyerId:  rec.buyer_id,
             text:     igStoryCta(nombreIg),
           })
-          if (!ctaRes?.ok) logErr('sendBuyerMessage (CTA Instagram) falló para orden', rec.order_id, ctaRes?.error)
           rec.ig_cta_sent = !!ctaRes?.ok
-
-          await tgSend(env, env.TELEGRAM_CHAT_ID,
-            `📬 Orden <code>${rec.order_id}</code> ENTREGADA (${rec.buyer_name}).\n` +
-            `${ctaRes?.ok ? '✅' : '⚠️'} CTA de Instagram enviado al cliente. Recordatorio de reseña en 48 h.`)
+          if (ctaRes?.ok) {
+            rec.ig_cta_warned = false
+            await tgSend(env, env.TELEGRAM_CHAT_ID,
+              `📸 Orden <code>${rec.order_id}</code> (CTA Instagram): ${msgStatusLine(ctaRes)}`)
+          } else {
+            logErr('sendBuyerMessage (CTA Instagram) falló para orden', rec.order_id, ctaRes?.error)
+            if (!rec.ig_cta_warned) {
+              await tgSend(env, env.TELEGRAM_CHAT_ID,
+                `📸 Orden <code>${rec.order_id}</code> (CTA Instagram): ${msgStatusLine(ctaRes)}`)
+              rec.ig_cta_warned = true
+            }
+          }
           await saveOrder(env, rec)
-        } else if (!rec.feedback_done && (Date.now() - rec.delivered_at) >= HOURS_48_MS) {
-          // a) Feedback automático (best-effort).
-          const fbRes = await sendOrderFeedback(token, rec.order_id)
-          if (!fbRes.ok) logErr('feedback falló para orden', rec.order_id, fbRes.error)
+        }
 
-          // b) Recordatorio de reseña al comprador.
-          if (sellerId === null) sellerId = await fetchSellerId(token)
-          const nombre = firstName(shipment?.receiver_address?.receiver_name || rec.buyer_name)
-          const recordatorio =
-            `Hola ${nombre}, ¡gracias por tu compra! 🙌 Si quedaste conforme, te agradeceríamos un montón ` +
-            'tu calificación ⭐ en MercadoLibre: nos ayuda muchísimo a seguir creciendo. ¡Que lo disfrutes! 🚗'
+        // 3) A las 48 h: feedback (1 intento) + recordatorio de reseña (reintenta).
+        if (rec.delivered_at && !rec.feedback_done && (Date.now() - rec.delivered_at) >= HOURS_48_MS) {
+          // a) Feedback automático: un solo intento (best-effort, sin cupo).
+          if (!rec.feedback_attempted) {
+            const fbRes = await sendOrderFeedback(token, rec.order_id)
+            rec.feedback_attempted = true
+            rec.feedback_ok = !!fbRes.ok
+            if (!fbRes.ok) logErr('feedback falló para orden', rec.order_id, fbRes.error)
+            await tgSend(env, env.TELEGRAM_CHAT_ID,
+              `${fbRes.ok ? '✅' : '⚠️'} Feedback orden <code>${rec.order_id}</code>` +
+              (fbRes.ok ? '' : ` (${fbRes.error})`))
+            await saveOrder(env, rec)
+          }
 
-          const msgRes = await sendBuyerMessage(env, token, {
-            packId:   rec.pack_id || rec.order_id,
-            sellerId,
-            buyerId:  rec.buyer_id,
-            text:     recordatorio,
-          })
-          if (!msgRes?.ok) logErr('sendBuyerMessage (recordatorio) falló para orden', rec.order_id, msgRes?.error)
+          // b) Recordatorio de reseña al comprador: reintentar hasta que salga.
+          if (!rec.review_msg_sent) {
+            if (sellerId === null) sellerId = await fetchSellerId(token)
+            const nombre = firstName(shipment?.receiver_address?.receiver_name || rec.buyer_name)
+            const recordatorio =
+              `Hola ${nombre}, ¡gracias por tu compra! 🙌 Si quedaste conforme, te agradeceríamos un montón ` +
+              'tu calificación ⭐ en MercadoLibre: nos ayuda muchísimo a seguir creciendo. ¡Que lo disfrutes! 🚗'
+            const msgRes = await sendBuyerMessage(env, token, {
+              packId:   rec.pack_id || rec.order_id,
+              sellerId,
+              buyerId:  rec.buyer_id,
+              text:     recordatorio,
+            })
+            rec.review_msg_sent = !!msgRes?.ok
+            if (msgRes?.ok) {
+              rec.review_warned = false
+              await tgSend(env, env.TELEGRAM_CHAT_ID,
+                `⭐ Orden <code>${rec.order_id}</code> (recordatorio reseña): ${msgStatusLine(msgRes)}`)
+            } else {
+              logErr('sendBuyerMessage (recordatorio) falló para orden', rec.order_id, msgRes?.error)
+              if (!rec.review_warned) {
+                await tgSend(env, env.TELEGRAM_CHAT_ID,
+                  `⭐ Orden <code>${rec.order_id}</code> (recordatorio reseña): ${msgStatusLine(msgRes)}`)
+                rec.review_warned = true
+              }
+            }
+            await saveOrder(env, rec)
+          }
 
-          // c) Reporte al vendedor.
-          await tgSend(env, env.TELEGRAM_CHAT_ID,
-            `${fbRes.ok ? '✅' : '⚠️'} Feedback orden <code>${rec.order_id}</code>` +
-            (fbRes.ok ? '' : ` (${fbRes.error})`) + '\n' +
-            `${msgRes?.ok ? '✅' : '⚠️'} Recordatorio de reseña enviado (${rec.buyer_name}).`)
-
-          // d) Marcar como finalizada.
-          rec.feedback_done = true
-          await saveOrder(env, rec)
+          // c) Cerrar la orden cuando feedback (intentado) y recordatorio (enviado) estén listos.
+          if (rec.feedback_attempted && rec.review_msg_sent) {
+            rec.feedback_done = true
+            await saveOrder(env, rec)
+          }
         }
       }
 

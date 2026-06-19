@@ -1,5 +1,30 @@
 # CHECKPOINT — MLPU + Bot de Telegram (post-venta ML)
-**Última sesión:** 2026-06-18 | **Worker Version:** 8f994be7 (desplegado) | **Estado:** Módulos 1 y 2 desplegados y funcionando con datos reales; permiso de órdenes RESUELTO; todo commiteado y pusheado a main.
+**Última sesión:** 2026-06-19 | **Worker Version:** b1f2236b (desplegado) | **Estado:** Mensajería al comprador ARREGLADA (Action Guide); scheduler con reintento+aviso; nuevo bot Python standalone creado.
+
+## Sesión 2026-06-19 — Fix mensajería + bot Python
+**SÍNTOMA:** el bot dejó de enviar mensajes a compradores y el automático de "preparación".
+**CAUSA RAÍZ:** ML bloquea que un vendedor NEWBIE INICIE conversación con POST directo a `/messages`
+(`conversation_status: blocked / blocked_by_conversation_initiated_by_seller_limited`). No era el token
+(verificado en vivo: token activo, /orders y /users/me 200). Es política de ML para reputación baja.
+**FIX (desplegado, Version b1f2236b):**
+- `worker/messaging.js`: `sendBuyerMessage` ahora usa la **Action Guide API**. Consulta
+  `GET /messages/action_guide/packs/{pack}?tag=post_sale`; si hay opción FREE_TEXT `OTHER`
+  (char_limit 350, cap_available) envía vía `POST .../action_guide/packs/{pack}/option`
+  `{option_id:"OTHER", text}`. Con adjuntos→clásico. Cupo agotado→intenta clásico y si no
+  devuelve `{ok:false, need_buyer_reply:true}`. Conversación abierta→clásico. Helpers nuevos:
+  postClassicMessage, getActionGuideOptions, postActionGuideOption.
+- `worker/scheduler.js`: **FIX A** flags de idempotencia (shipped_msg_sent, ig_cta_sent,
+  review_msg_sent) solo se marcan si el envío SALIÓ → reintenta hasta lograrlo, no pierde
+  mensajes. **FIX B** avisa por Telegram el motivo (entregado/cupo agotado/error) vía
+  `msgStatusLine`, una sola vez por estado (sin spam). CTA Instagram acortado a ≤350 sin HTML.
+- Verificado en vivo (2 agentes): 3 estados reales — conv. virgen→Action Guide OK;
+  conv. abierta→clásico OK; cupo agotado sin respuesta→need_buyer_reply (límite real de ML).
+**NUEVO:** `bot-python/` — bot standalone python-telegram-bot v21 (async, botonera inline, FSM
+de texto, polling de ventas/mensajes, Action Guide nativo). 9 archivos: config/ml_client/
+keyboards/formatters/handlers/main + .env.example/requirements/README. Compila OK. Puede usar
+el Worker proxy (ML_USE_PROXY) para no gestionar token. NO desplegado aún (lo corre el usuario).
+**LÍMITE ML conocido:** cap OTHER = 1 por pack hasta que el comprador responda; solo 1 mensaje
+de inicio se entrega, el resto queda pendiente (reintenta solo al abrirse la conversación).
 
 ## Estado
 Bot de Telegram dentro del Worker `mlpu-proxy` (webhook + Cron 10 min + KV). Bot `t.me/Pulicadorlibre_bot`, chat 1036420688.
