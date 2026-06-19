@@ -55,12 +55,12 @@ const MAIN_KB = {
   keyboard: [
     [{ text: '🧾 Órdenes' }, { text: '📭 Pendientes' }],
     [{ text: '📋 Historial' }, { text: '💬 Mensajes' }],
-    [{ text: 'ℹ️ Ayuda' }],
+    [{ text: 'ℹ️ Ayuda' }, { text: '🧹 Limpiar' }],
   ],
   resize_keyboard: true,
 }
 const isButtonLabel = (t) =>
-  ['📋 Historial', '💬 Mensajes', '🧾 Órdenes', '📭 Pendientes', 'ℹ️ Ayuda'].includes(t)
+  ['📋 Historial', '💬 Mensajes', '🧾 Órdenes', '📭 Pendientes', 'ℹ️ Ayuda', '🧹 Limpiar'].includes(t)
 
 // ── Webhook receiver ─────────────────────────────────────────
 export async function handleTelegramWebhook(request, env, ctx) {
@@ -134,6 +134,7 @@ async function handleTextCommand(env, msg) {
   if (text === '📭 Pendientes') return sendPendingList(env, chatId)
   if (text === '📋 Historial')  return sendHistoryMenu(env, chatId)
   if (text === '💬 Mensajes')   return sendMessagesMenu(env, chatId)
+  if (text === '🧹 Limpiar')    return clearChat(env, chatId, msg.message_id)
   if (text === '/historial')    return sendMlLast(env, chatId, 0)
   if (text.startsWith('/buscar ')) return runMlSearch(env, chatId, text.slice(8).trim())
 
@@ -161,6 +162,27 @@ async function handleTextCommand(env, msg) {
   }
 
   await tgSend(env, chatId, 'No reconozco eso. Usá los botones de abajo o /start.', { reply_markup: MAIN_KB })
+}
+
+// ── Limpiar el chat ───────────────────────────────────────────
+// Telegram no expone un "borrar todo": se borra por rango de message_id hacia
+// atrás desde el mensaje actual. `deleteMessages` borra 1-100 de una y salta los
+// que no existen; si falla (algún mensaje no se puede borrar), cae a borrar uno
+// por uno ignorando los que Telegram no permita (mensajes ajenos > 48 h, etc.).
+async function clearChat(env, chatId, fromMessageId) {
+  const upto = Number(fromMessageId) || 0
+  if (!upto) return tgSend(env, chatId, '🧹 No pude limpiar (sin referencia de mensaje).', { reply_markup: MAIN_KB })
+
+  const ids = []
+  for (let id = upto; id > Math.max(0, upto - 100); id--) ids.push(id)
+
+  const bulk = await tgApi(env, 'deleteMessages', { chat_id: chatId, message_ids: ids })
+  if (!bulk?.ok) {
+    for (const id of ids) {
+      await tgApi(env, 'deleteMessage', { chat_id: chatId, message_id: id })
+    }
+  }
+  return tgSend(env, chatId, '🧹 Chat limpiado.', { reply_markup: MAIN_KB })
 }
 
 // ── Botonera + acciones (reutilizadas por comandos y botones inline) ──
