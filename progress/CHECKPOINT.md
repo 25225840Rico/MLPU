@@ -1,5 +1,5 @@
 # CHECKPOINT — MLPU + Bot de Telegram (post-venta ML)
-**Última sesión:** 2026-06-19 | **Worker Version:** b1f2236b (desplegado) | **Estado:** Mensajería al comprador ARREGLADA (Action Guide); scheduler con reintento+aviso; nuevo bot Python standalone creado.
+**Última sesión:** 2026-06-19 | **Worker Version:** b1f2236b (desplegado) | **Estado:** CERRADO. Mensajería al comprador ARREGLADA (Action Guide); scheduler con reintento+aviso; bot Python standalone creado y VERIFICADO que arranca (build_app OK con PTB 21.6: 4 handlers + 2 jobs; 13 botoneras callback<=64b; html.escape OK). Todo pusheado a main (aff52ae). Sin trabajo pendiente de código.
 
 ## Sesión 2026-06-19 — Fix mensajería + bot Python
 **SÍNTOMA:** el bot dejó de enviar mensajes a compradores y el automático de "preparación".
@@ -76,6 +76,11 @@ ready_to_ship, tracking 713094097866. **El historial real (Módulo 1) ya funcion
 - Repo 25225840Rico/MLPU, rama main. Worker versionado por 1ª vez (antes solo working tree).
 - .gitignore: excluye .wrangler/ y worker/progress/. Sin secrets en el repo (van por wrangler secret).
 
-## PRÓXIMO PASO (futuro, opcional)
-- Probar en Telegram el flujo real de los menús 📋/💬 con una venta nueva.
-- Posible Módulo 3 (reclamos/Post Purchase) si se quiere; el permiso ya está activo.
+## PRÓXIMO PASO (2026-06-19 — todo lo pedido HECHO/desplegado/pusheado: commit aff52ae)
+- Verificación real (usuario): en la próxima venta, confirmar que el mensaje al comprador
+  sale por Action Guide. El Worker ya está vivo (Version b1f2236b).
+- Bot Python (opcional): `cd bot-python && cp .env.example .env`, poner tokens, `python main.py`
+  (o `ML_USE_PROXY=true` apuntando al Worker proxy para no gestionar token). NO desplegado aún.
+- Límite ML conocido (no bug): cap OTHER=1 → 1 mensaje de inicio por venta hasta que el
+  comprador responda; el scheduler reintenta solo al abrirse la conversación.
+- Futuro opcional: Módulo 3 (reclamos/Post Purchase); acortar más plantillas si se acercan a 350.

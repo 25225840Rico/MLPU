@@ -1,116 +1,90 @@
-HANDOFF — MLPU: Bot de Telegram post-venta ML — 2026-06-18 (sesión 2)
+HANDOFF — MLPU: Bot post-venta ML — 2026-06-19 (sesión 3)
 
-OBJETIVO
-Bot de Telegram (dentro del Worker mlpu-proxy) para post-venta de MercadoLibre Chile:
-alertas de venta, asignar tracking por foto del sticker, mandar tracking+fotos del
-empaque al comprador por mensajería ML, seguimiento automático, historial de ventas,
-mensajería directa, y TODO operable por botonera. Reglas del usuario: NO tocar lógica
-existente; aditivo; módulos nuevos separados; mostrar diff y esperar OK antes de aplicar.
+OBJETIVO DE LA SESIÓN
+El usuario reportó que el bot dejó de enviar mensajes a los compradores y que el
+automático de "pedido en preparación" no salía. Diagnosticar y arreglar. Luego, por
+pedido explícito con plena autonomía, construir además un bot de Telegram standalone
+en Python para gestión post-venta con botonera inline.
 
-ARQUITECTURA
-Cloudflare Worker (serverless) + frontend React/Vite (GitHub Pages) + KV. Sin servidor
-Node ni BD. Bot = webhook Telegram (no polling) + Cron Trigger + KV. El Worker es la
-única fuente del token OAuth de ML.
+REPO Y ENTORNO
+- Repo: https://github.com/25225840Rico/MLPU  (rama main; el usuario commitea directo a main).
+- Proyecto local: C:\Users\aronr\OneDrive\Escritorio\automl  ; Worker dir: .\worker
+- Worker: https://mlpu-proxy.aronricocl.workers.dev  (Cloudflare; webhook + Cron */10 + KV).
+  Deploy MANUAL: cd worker && npx wrangler deploy  (wrangler ~4.103, logueado aronricocl@gmail.com).
+- Bot Telegram: t.me/Pulicadorlibre_bot ; chat usuario = 1036420688 ; seller id = 283388639 ; site MLC.
+- KV: ML_TOKENS=1f6324c3659d4388bec284825c2864be ; ML_ORDERS=d72bf35159b54eabadffafc521c1562b.
 
-DESPLIEGUE / ENTORNO
-- Proyecto: C:\Users\aronr\OneDrive\Escritorio\automl   ; Worker dir: .\worker
-- wrangler 4.102.0, logueado como aronricocl@gmail.com. Deploy MANUAL: cd worker && npx wrangler deploy
-- Worker URL: https://mlpu-proxy.aronricocl.workers.dev   (Version desplegada: 14934abe)
-- Bot: t.me/Pulicadorlibre_bot ; chat usuario = 1036420688 ; seller id = 283388639
-- Secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID=1036420688, ANTHROPIC_API_KEY, ML_CLIENT_ID, ML_CLIENT_SECRET
-- KV: ML_TOKENS=1f6324c3659d4388bec284825c2864be ; ML_ORDERS=d72bf35159b54eabadffafc521c1562b
-- Cron actual: */10 * * * * (cada 10 min)
-- git: repo 25225840Rico/MLPU rama main. Cambios del bot SOLO en working tree (sin commit).
+CAUSA RAÍZ (confirmada en vivo, NO era el token)
+ML bloquea que un vendedor NEWBIE/reputación baja INICIE una conversación post-venta con
+POST directo a /messages. La conversación devuelve:
+  conversation_status: { status:"blocked", substatus:"blocked_by_conversation_initiated_by_seller_limited" }
+Verificado: token activo, /users/me y /orders/* dan 200. Es POLÍTICA de ML, no bug de código.
+La forma oficial de iniciar es la ACTION GUIDE API:
+  GET  /messages/action_guide/packs/{pack}?tag=post_sale     -> opciones (OTHER=FREE_TEXT, char_limit 350, cap_available)
+  POST /messages/action_guide/packs/{pack}/option?tag=post_sale  body {option_id:"OTHER", text}  (o template_id para plantillas)
+Cuando el comprador responde, la conversación pasa a "active" y vuelve a servir /messages clásico (sin cap).
 
-BLOQUEADOR CRÍTICO (acción del usuario)
-ML devuelve 403 PolicyAgent en GET /orders/{id} y /orders/search (verificado en vivo con
-curl al proxy). El token del KV NO tiene permiso de lectura de órdenes. Por eso NINGÚN
-feature de órdenes funciona con datos reales (alertas, historial, tracking-match). /users/me
-y /applications SÍ funcionan. El callback de notificaciones YA está bien configurado en la
-app (notifications_callback_url=.../ml/notifications, topics orders_v2+shipments, verificado).
-FIX (usuario): re-autorizar la app (rehacer OAuth con scope read) para mint-ear token nuevo
-con permiso de órdenes y guardarlo en KV vía /ml/auth/init. Reintentar luego:
-  curl https://mlpu-proxy.aronricocl.workers.dev/ml/orders/2000003456789012   (403 ahora → 404 cuando se arregle)
+ESTADO ACTUAL — TODO HECHO, DESPLEGADO Y PUSHEADO (commit aff52ae, Worker Version b1f2236b)
+1) worker/messaging.js — sendBuyerMessage reescrita (punto único de envío):
+   - Con adjuntos -> postClassicMessage (Action Guide no transporta archivos).
+   - Sin adjuntos -> getActionGuideOptions(pack); si hay opción FREE_TEXT (OTHER) con cap>=1
+     envía vía postActionGuideOption (texto truncado a char_limit). Si cupo agotado intenta
+     el clásico (por si la conv ya abrió) y si no devuelve {ok:false, need_buyer_reply:true}.
+   - Helpers nuevos: postClassicMessage, getActionGuideOptions, postActionGuideOption.
+2) worker/scheduler.js — FIX A y B:
+   - A) Los flags de idempotencia ahora se separan y SOLO se marcan si el envío salió:
+     shipped_msg_sent, ig_cta_sent, review_msg_sent (+ feedback_attempted). Así reintenta
+     hasta lograrlo y NO pierde mensajes en silencio. El aviso al vendedor (shipped/delivered)
+     se marca aparte (shipped_notified, delivered_at) una sola vez.
+   - B) Avisa por Telegram el motivo via msgStatusLine (entregado / cupo agotado / error),
+     una sola vez por estado (flags *_warned) para no spamear cada 10 min.
+   - igStoryCta acortado a 271 chars y SIN HTML (va a mensajería ML, no a Telegram).
+3) bot-python/ — NUEVO bot standalone python-telegram-bot v21 (async). 9 archivos, todos
+   compilan (py_compile OK) y VERIFICADO que arranca: PTB 21.6 instalado; main.build_app()
+   construye la Application (4 handlers + 2 jobs de polling); las 13 botoneras generan con
+   callback_data <=64 bytes; html.escape confirmado en las cards. Falta solo correrlo con
+   tokens reales (lo hace el usuario). NO desplegado:
+   - config.py (vars de entorno, QUICK_REPLIES, límites; ML_USE_PROXY para usar el Worker proxy)
+   - ml_client.py (httpx async: action_guide, send option, direct message, orders, seller; reintentos)
+   - keyboards.py (botoneras inline por estado, prefijos nav:/ord:/pv:/msg:/cfg:)
+   - formatters.py (cards HTML con html.escape; mapas de estado pago/envío; map_error)
+   - handlers.py (router de callbacks, FSM de texto libre vía ForceReply en user_data['await'],
+     jobs poll_orders_job y poll_messages_job, autorización de un solo chat)
+   - main.py (logging rotado, PicklePersistence, registro de handlers/jobs, webhook o polling)
+   - .env.example, requirements.txt, README.md, .gitignore
 
-ESTADO ACTUAL
-- Pasos 1-5 + evidencia (tracking+fotos por mensajería) + scheduler (cron 10min): DESPLEGADOS.
-- Bug ctx.waitUntil (las respuestas del bot no llegaban): CORREGIDO → handleTelegramWebhook ahora
-  hace `await work` antes del 200. Confirmado por el usuario que el bot ya responde.
-- Orden de prueba TEST-1001: BORRADA (KV de órdenes vacío, listo para datos reales).
-- Botonera: ReplyKeyboard MAIN_KB (etiquetas como texto, mapeadas en handleTextCommand) +
-  inline_keyboard con callback_data en handleCallback. Esquema callbacks: ord, pend, si, no,
-  fin, hist:<page>, ver:<id>, asg:<id>, msg:<id>.
+VERIFICACIÓN HECHA
+- node --check + esbuild bundle del Worker: OK. Deploy OK (Version b1f2236b).
+- 2 agentes debugeadores (en vivo + estático) confirmaron los 3 estados reales:
+  conv. virgen -> Action Guide OK ; conv. abierta -> clásico OK ; cupo agotado sin respuesta
+  -> need_buyer_reply (límite real de ML). El agente estático originó los FIX A/B (ya aplicados).
+- bot-python: solo compilación estática (no se ejecutó; no hay tokens de prueba en este entorno).
 
-ÚLTIMO PASO COMPLETADO
-Módulo 1 (historial real desde ML): CREADO worker/ml-history.js (compila OK, no toca nada).
-Funciones: getOrderHistory({limit,offset,status}), getOrdersByDateRange(from,to) [pagina,
-delay 100ms], searchOrderByBuyer(query), getOrderDetail(orderId) [+shipment], getSellerId,
-todayRange/monthRange. Resuelve nombre comprador con GET /users/{id} (ME2), fallback nickname
-en 403. Lanza Error con .status para detectar 403. Log [ML-HISTORY].
-Se mostró al usuario el DIFF EXACTO para telegram-bot.js y el usuario aprobó aplicarlo.
+LÍMITE DE ML CONOCIDO (no es bug, no perseguir "arreglarlo")
+cap OTHER = 1 por pack hasta que el comprador responda. Solo se entrega UN mensaje de inicio
+por venta; el resto queda pendiente y el scheduler lo reintenta solo cuando la conversación
+se abre. Se levanta al subir reputación (más ventas completadas).
 
 PROXIMO PASO EXACTO (al retomar)
-APLICAR el diff del Módulo 1 a worker/telegram-bot.js (aún NO aplicado):
-  ① import: agregar
-     import { getOrderHistory, getOrdersByDateRange, searchOrderByBuyer,
-              getOrderDetail, todayRange, monthRange } from './ml-history.js'
-  ② MAIN_KB: nueva fila [📋 Historial][💬 Mensajes]; quitar 📚 Historial; fila [ℹ️ Ayuda] sola.
-     isButtonLabel = (t)=>['📋 Historial','💬 Mensajes','🧾 Órdenes','📭 Pendientes','ℹ️ Ayuda'].includes(t)
-  ③ En handleTextCommand, tras el bloque await_message, agregar manejo await_search:
-     if (pend0?.mode==='await_search' && text && !text.startsWith('/') && !isButtonLabel(text)) {
-       await clearPending(env,chatId); return runMlSearch(env,chatId,text) }
-  ④ Routing: reemplazar la línea de '📚 Historial' por:
-     if (text==='📋 Historial') return sendHistoryMenu(env,chatId)
-     if (text==='💬 Mensajes')  return tgSend(env,chatId,'💬 Mensajería: se activa en el Módulo 2.',{reply_markup:MAIN_KB})
-     y agregar alias: if (text==='/historial') return sendMlLast(env,chatId,0)
-                      if (text.startsWith('/buscar ')) return runMlSearch(env,chatId,text.slice(8).trim())
-  ⑤ En handleCallback agregar:
-     if (data==='hmenu') return sendHistoryMenu(env,chatId)
-     if (data==='hsearch') return sendMlSearchPrompt(env,chatId)
-     if (data==='hday') return sendMlRange(env,chatId,'today')
-     if (data==='hmonth') return sendMlRange(env,chatId,'month')
-     if (data.startsWith('hlast:')) return sendMlLast(env,chatId,parseInt(data.slice(6),10)||0)
-     if (data.startsWith('vord:')) return sendMlDetail(env,chatId,data.slice(5))
-     if (data.startsWith('ship:')) return sendShipment(env,chatId,data.slice(5))
-  ⑥ Agregar funciones nuevas (junto a las send…): withMlGuard(env,chatId,fn) [si e.status===403
-     avisa "re-autorizá la app con scope read"], sendHistoryMenu (inline [📅 Últimas ventas]
-     [🔍 Buscar cliente][📆 Hoy][📆 Este mes] con callbacks hlast:0/hsearch/hday/hmonth),
-     sendMlLast(env,chatId,offset) [10 c/u, nav ◀/▶ hlast:<offset±10>, botones vord:<id>],
-     fmtOrderLine(o) ["#id | nombre | producto | $ | estado | fecha"], ordersListMarkup(orders)
-     [botones vord:<id>], sendMlSearchPrompt [setPending mode await_search], runMlSearch(query),
-     sendMlRange(which today|month) [usa getOrdersByDateRange + total $], sendMlDetail(orderId)
-     [detalle + botones [💬 Mensajear msg:<id>][📦 Ver envío ship:<id>][⬅️ Volver hmenu]],
-     sendShipment(orderId). Reusan statusEs/fmtMoney/setPending existentes.
-  Luego: validar `node node_modules/esbuild/bin/esbuild worker/index.js --bundle --format=esm
-  --outfile=/dev/null`, y `cd worker && npx wrangler deploy`.
-  Setear vars en wrangler.toml: [vars] SELLER_ID="283388639" ML_SITE_ID="MLC".
-  (El diff completo y el texto exacto está en el historial del chat anterior; las firmas de
-  ml-history.js ya existen en worker/ml-history.js.)
+1) No hay trabajo pendiente del lado del código. Esperar verificación del usuario: en la
+   próxima venta real, confirmar que el mensaje al comprador sale (revisar Telegram; ver logs
+   con: cd worker && npx wrangler tail).
+2) Si el usuario quiere correr el bot Python: cd bot-python ; cp .env.example .env ; editar
+   tokens (TELEGRAM_BOT_TOKEN, AUTHORIZED_CHAT_ID=1036420688, ML_SELLER_ID=283388639) ;
+   pip install -r requirements.txt ; python main.py. Recomendado ML_USE_PROXY=true con
+   ML_BASE_URL=https://mlpu-proxy.aronricocl.workers.dev/ml para no gestionar token.
+3) Posibles mejoras futuras solo si el usuario lo pide: Módulo 3 (reclamos/Post Purchase);
+   acortar más plantillas; desplegar el bot Python como servicio systemd (instrucciones en README).
 
-DESPUÉS — MÓDULO 2 (mensajería directa, esperar OK del usuario por módulo)
-Crear worker/ml-messaging.js:
-  - sendMessageToBuyer(packId,text) → POST /marketplace/messages/packs/{packId} body {text,text_translated:""}
-    (endpoint que pidió el usuario; si pack_id null usar order_id; si IN_MODERATION avisar).
-  - getConversation(packId,sellerId) → GET /marketplace/messages/packs/{packId}/sellers/{sellerId}
-Botón 💬 Mensajes → submenu [✍️ Mensaje directo][💬 Ver conversación][📋 Plantillas].
-Plantillas: [📦 Despachado][🚚 En camino][✅ Recibido][⭐ Calificación], cada una pide order_id,
-inserta nombre automático, pide confirmación [✅ Confirmar][❌ Cancelar]. Log [ML-MSG].
-NO tocar messaging.js existente (el flujo de evidencia lo sigue usando).
-
-ADVERTENCIAS YA CONOCIDAS
-- PUT tracking /shipments solo en envíos custom/a acordar; igual el tracking va por mensajería + KV.
-- Mensajería/adjuntos ML con reglas (ventanas, moderación). site_id MLC.
-- Mi shell Git Bash mangorna emojis/acentos en curl (UTF-8); el Worker maneja UTF-8 bien.
-
-ARCHIVOS CLAVE (worker/)
-- index.js: router /tg/webhook + /ml/notifications + scheduled(); exporta getValidAccessToken. (NO tocar salvo nada)
-- telegram-bot.js: dispatcher, botonera (MAIN_KB + handleCallback), comandos, flujo despacho. (SE TOCA: Módulo 1 y 2)
-- orders.js, tracking.js, messaging.js, scheduler.js: NO tocar.
-- ml-history.js: NUEVO (Módulo 1, listo). ml-messaging.js: por crear (Módulo 2).
-- wrangler.toml: KV bindings + [triggers] crons */10. Falta [vars] SELLER_ID/ML_SITE_ID.
+ARCHIVOS CLAVE
+- worker/messaging.js  -> sendBuyerMessage + helpers Action Guide (CORE del fix).
+- worker/scheduler.js   -> runScheduled, msgStatusLine, flags de reintento (FIX A/B).
+- worker/index.js       -> router, webhook ML, getValidAccessToken/refresh (NO se tocó).
+- worker/orders.js, ml-messaging.js, ml-history.js -> NO se tocaron esta sesión.
+- bot-python/*          -> bot standalone nuevo (README.md tiene setup en 5 pasos).
+- progress/CHECKPOINT.md -> sección "Sesión 2026-06-19" arriba.
 
 COMO RETOMAR
-Leer este HANDOFF + progress/CHECKPOINT.md. Verificar deploy:
-  curl -s -X POST -d '{}' https://mlpu-proxy.aronricocl.workers.dev/tg/webhook  → "ok"
-Continuar desde PROXIMO PASO EXACTO (aplicar diff Módulo 1). NO rehacer pasos 1-5 (desplegados).
-Para debug en vivo: cd worker && npx wrangler tail.
+Leer este HANDOFF + progress/CHECKPOINT.md (no releer el chat). El Worker ya está desplegado
+y todo pusheado a main. Continuar desde PROXIMO PASO EXACTO. Para debug en vivo del Worker:
+cd worker && npx wrangler tail. Para el bot Python: ver bot-python/README.md.

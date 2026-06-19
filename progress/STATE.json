@@ -1,25 +1,26 @@
 {
-  "phase": "modulo1-historial-en-curso",
-  "status": "blocked-by-ml-403 / diff-modulo1-aprobado-sin-aplicar",
-  "last_session": "2026-06-18T00:00:00Z",
-  "last_worker_version": "14934abe-5e4e-47f1-b5e2-874f97a7d22f",
-  "last_commit": "41b21dc (bot SIN commitear; cambios en working tree)",
-  "next_step": "Aplicar el diff del Modulo 1 a telegram-bot.js (import ml-history, MAIN_KB 📋 Historial/💬 Mensajes, await_search, callbacks hmenu/hlast/hsearch/hday/hmonth/vord/ship, funciones + withMlGuard). Compilar + wrangler deploy. Setear [vars] SELLER_ID=283388639 ML_SITE_ID=MLC. Luego Modulo 2 ml-messaging.js.",
+  "phase": "mensajeria-arreglada + bot-python-creado-y-verificado",
+  "status": "CERRADO. DONE-deployed-pushed. Bot Python arranca OK (build_app PTB 21.6). Esperando verificacion real del usuario con tokens.",
+  "last_session": "2026-06-19T00:00:00Z",
+  "last_worker_version": "b1f2236b-5b3c-4742-8e34-e0c77f8a71fa",
+  "last_commit": "aff52ae (main, pusheado)",
+  "next_step": "Sin trabajo de codigo pendiente. Verificar en la proxima venta real que el mensaje al comprador sale via Action Guide (wrangler tail). Si el usuario quiere: correr bot-python (cp .env.example .env, tokens, python main.py; recomendado ML_USE_PROXY=true).",
   "open_tasks": [
-    "Aplicar diff Modulo 1 a telegram-bot.js (aprobado por el usuario)",
-    "wrangler.toml: agregar [vars] SELLER_ID y ML_SITE_ID",
-    "Modulo 2: crear ml-messaging.js + boton 💬 Mensajes (submenu directo/conversacion/plantillas)",
-    "USUARIO: re-autorizar app ML con scope read para destrabar lectura de ordenes (403)"
+    "USUARIO: verificar en venta real que el mensaje al comprador sale (Action Guide)",
+    "OPCIONAL: correr/desplegar bot-python (README tiene setup en 5 pasos + systemd)"
   ],
-  "blockers": [
-    "ML 403 PolicyAgent en GET /orders/* con el token actual: bloquea historial y todo lo de ordenes hasta re-autorizar"
+  "blockers": [],
+  "known_limits": [
+    "ML cap OTHER=1 por pack: solo 1 mensaje de inicio por venta hasta que el comprador responda (politica de ML, no bug; el scheduler reintenta al abrirse la conversacion)"
   ],
   "done_this_session": [
-    "Fix ctx.waitUntil (respuestas del bot ya llegan)",
-    "Botonera reply+inline; Historial KV paginado; cron a */10 min",
-    "Borrada orden de prueba TEST-1001",
-    "Verificado callback ML bien configurado y Anthropic key OK",
-    "Creado ml-history.js (compila, no aplicado al bot aun)"
+    "Diagnostico causa raiz en vivo: ML bloquea inicio de conversacion de vendedor NEWBIE (blocked_by_conversation_initiated_by_seller_limited), NO era el token",
+    "worker/messaging.js: sendBuyerMessage usa Action Guide API (GET options + POST option OTHER FREE_TEXT 350; clasico si conv abierta o adjuntos; need_buyer_reply si cupo agotado)",
+    "worker/scheduler.js FIX A: flags de idempotencia solo si el envio salio (shipped_msg_sent/ig_cta_sent/review_msg_sent) -> reintenta, no pierde mensajes",
+    "worker/scheduler.js FIX B: avisa por Telegram el motivo via msgStatusLine, una vez por estado (sin spam); CTA Instagram acortado a 271 sin HTML",
+    "Desplegado Worker Version b1f2236b; verificado por 2 agentes (vivo + estatico)",
+    "Creado bot-python/ standalone (python-telegram-bot v21, 9 archivos, compila OK)",
+    "Commit aff52ae pusheado a main"
   ],
   "bot": "t.me/Pulicadorlibre_bot",
   "telegram_chat_id": "1036420688",
