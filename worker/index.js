@@ -22,6 +22,7 @@
 import { handleTelegramWebhook } from './telegram-bot.js'
 import { recordOrderFromML } from './orders.js'
 import { runScheduled } from './scheduler.js'
+import { mlFetch } from './ml-fetch.js'
 
 const ML_API = 'https://api.mercadolibre.com'
 const SESSION_KEY = 'ml_session'
@@ -218,7 +219,7 @@ async function processOrderNotification(env, resource) {
   const orderId = resource.split('/').filter(Boolean).pop()
   const token = await getValidAccessToken(env)
 
-  const r = await fetch(`${ML_API}/orders/${orderId}`, {
+  const r = await mlFetch(`${ML_API}/orders/${orderId}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!r.ok) throw new Error(`GET /orders/${orderId} HTTP ${r.status}`)
@@ -229,7 +230,7 @@ async function processOrderNotification(env, resource) {
   const shipmentId = order.shipping?.id
   if (shipmentId) {
     try {
-      const sr = await fetch(`${ML_API}/shipments/${shipmentId}`, {
+      const sr = await mlFetch(`${ML_API}/shipments/${shipmentId}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (sr.ok) shipment = await sr.json()

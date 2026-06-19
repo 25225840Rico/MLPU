@@ -11,6 +11,7 @@
  */
 import { getValidAccessToken } from './index.js'
 import { getOrder, saveOrder, listOrders } from './orders.js'
+import { mlFetch } from './ml-fetch.js'
 
 const ML_API = 'https://api.mercadolibre.com'
 const log    = (...a) => console.log('[ML-BOT]', ...a)
@@ -93,7 +94,7 @@ export function clearMatch(best) {
 
 // ── Asignar tracking en ML + mensaje al comprador ─────────────
 async function mlGet(token, path) {
-  const r = await fetch(`${ML_API}${path}`, { headers: { Authorization: `Bearer ${token}` } })
+  const r = await mlFetch(`${ML_API}${path}`, { headers: { Authorization: `Bearer ${token}` } })
   const data = await r.json().catch(() => ({}))
   return { ok: r.ok, status: r.status, data }
 }
@@ -121,7 +122,7 @@ export async function assignTracking(env, orderId, tracking) {
   // 1) PUT tracking en ML (solo válido para envíos custom / a acordar).
   if (shipmentId) {
     try {
-      const r = await fetch(`${ML_API}/shipments/${shipmentId}`, {
+      const r = await mlFetch(`${ML_API}/shipments/${shipmentId}`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tracking_number: tracking }),

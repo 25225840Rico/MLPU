@@ -15,6 +15,7 @@ import { listOrders, saveOrder } from './orders.js'
 import { tgSend } from './telegram-bot.js'
 import { sendBuyerMessage } from './messaging.js'
 import { firstName } from './ml-history.js'
+import { mlFetch } from './ml-fetch.js'
 
 const ML_API = 'https://api.mercadolibre.com'
 const log    = (...a) => console.log('[ML-BOT]', ...a)
@@ -72,7 +73,7 @@ function msgStatusLine(res) {
 // Trae el shipment desde ML. Devuelve null si falla (no lanza).
 async function fetchShipment(token, shipmentId) {
   try {
-    const r = await fetch(`${ML_API}/shipments/${shipmentId}`, {
+    const r = await mlFetch(`${ML_API}/shipments/${shipmentId}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!r.ok) {
@@ -97,7 +98,7 @@ function estimatedDeliveryText(shipment) {
 // Trae el id del vendedor autenticado (se cachea una vez por corrida).
 async function fetchSellerId(token) {
   try {
-    const r = await fetch(`${ML_API}/users/me`, {
+    const r = await mlFetch(`${ML_API}/users/me`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!r.ok) {
@@ -115,7 +116,7 @@ async function fetchSellerId(token) {
 // Envía el feedback automático de la orden. Best-effort: no lanza.
 async function sendOrderFeedback(token, orderId) {
   try {
-    const r = await fetch(`${ML_API}/orders/${orderId}/feedback`, {
+    const r = await mlFetch(`${ML_API}/orders/${orderId}/feedback`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,

@@ -8,6 +8,7 @@
  */
 import { getValidAccessToken } from './index.js'
 import { sendBuyerMessage } from './messaging.js'
+import { mlFetch } from './ml-fetch.js'
 
 const ML_API = 'https://api.mercadolibre.com'
 const log = (...a) => console.log('[ML-MSG]', ...a)
@@ -18,7 +19,7 @@ const logErr = (...a) => console.error('[ML-MSG]', ...a)
  * Lanza Error con `.status` si la petición a ML falla.
  */
 async function resolveOrderParties(env, token, orderId) {
-  const res = await fetch(`${ML_API}/orders/${orderId}`, {
+  const res = await mlFetch(`${ML_API}/orders/${orderId}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
 
@@ -70,7 +71,7 @@ export async function getConversation(env, orderId, limit = 10) {
   const token = await getValidAccessToken(env)
   const parties = await resolveOrderParties(env, token, orderId)
 
-  const res = await fetch(
+  const res = await mlFetch(
     `${ML_API}/messages/packs/${parties.packId}/sellers/${parties.sellerId}?tag=post_sale&mark_as_read=false&limit=${limit}`,
     { headers: { Authorization: `Bearer ${token}` } }
   )

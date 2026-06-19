@@ -5,6 +5,7 @@
  * de mensajería de MercadoLibre, sin importar el tipo de envío de la orden.
  */
 import { getValidAccessToken } from './index.js'
+import { mlFetch } from './ml-fetch.js'
 
 const log    = (...a) => console.log('[ML-BOT]', ...a)
 const logErr = (...a) => console.error('[ML-BOT]', ...a)
@@ -21,7 +22,7 @@ export async function uploadAttachment(env, token, bytes, filename = 'foto.jpg',
     const form = new FormData()
     form.append('file', new File([bytes], filename, { type: mimeType }))
 
-    const res = await fetch(`${API_BASE}/messages/attachments?tag=post_sale&site_id=MLC`, {
+    const res = await mlFetch(`${API_BASE}/messages/attachments?tag=post_sale&site_id=MLC`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: form,
@@ -62,7 +63,7 @@ async function postClassicMessage(env, token, { packId, sellerId, buyerId, text,
     }
     if (attachments.length) body.attachments = attachments
 
-    const res = await fetch(`${API_BASE}/messages/packs/${packId}/sellers/${sellerId}?tag=post_sale`, {
+    const res = await mlFetch(`${API_BASE}/messages/packs/${packId}/sellers/${sellerId}?tag=post_sale`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -95,7 +96,7 @@ async function postClassicMessage(env, token, { packId, sellerId, buyerId, text,
  */
 async function getActionGuideOptions(env, token, packId) {
   try {
-    const res = await fetch(`${API_BASE}/messages/action_guide/packs/${packId}?tag=post_sale`, {
+    const res = await mlFetch(`${API_BASE}/messages/action_guide/packs/${packId}?tag=post_sale`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) return null
@@ -113,7 +114,7 @@ async function getActionGuideOptions(env, token, packId) {
  */
 async function postActionGuideOption(env, token, packId, payload) {
   try {
-    const res = await fetch(`${API_BASE}/messages/action_guide/packs/${packId}/option?tag=post_sale`, {
+    const res = await mlFetch(`${API_BASE}/messages/action_guide/packs/${packId}/option?tag=post_sale`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -205,7 +206,7 @@ export async function sendBuyerEvidence(env, orderId, { text, photos = [] }) {
 
   let order
   try {
-    const res = await fetch(`${API_BASE}/orders/${orderId}`, {
+    const res = await mlFetch(`${API_BASE}/orders/${orderId}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) {
