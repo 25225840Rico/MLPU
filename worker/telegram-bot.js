@@ -118,7 +118,7 @@ async function handleTextCommand(env, msg) {
   // Esperando el N° de orden para Mensajes (directo / conversación / plantilla).
   if (pend0?.mode === 'await_msg_order' && text && !text.startsWith('/') && !isButtonLabel(text)) {
     await setPending(env, chatId, { mode: 'await_message', order_id: text.trim() })
-    return void tgSend(env, chatId, `✍️ Escribe el texto del mensaje para el comprador de la orden <code>${text.trim()}</code>:`)
+    return tgSend(env, chatId, `✍️ Escribe el texto del mensaje para el comprador de la orden <code>${text.trim()}</code>:`)
   }
   if (pend0?.mode === 'await_conv_order' && text && !text.startsWith('/') && !isButtonLabel(text)) {
     await clearPending(env, chatId)
@@ -143,9 +143,9 @@ async function handleTextCommand(env, msg) {
 
   if (text.startsWith('/asignar')) {
     const orderId = text.split(/\s+/)[1]
-    if (!orderId) return void tgSend(env, chatId, 'Uso: <code>/asignar &lt;order_id&gt;</code>')
+    if (!orderId) return tgSend(env, chatId, 'Uso: <code>/asignar &lt;order_id&gt;</code>')
     const p = await getPending(env, chatId)
-    if (!p?.tracking_number) return void tgSend(env, chatId, 'No hay tracking pendiente. Mandá primero la foto del sticker.')
+    if (!p?.tracking_number) return tgSend(env, chatId, 'No hay tracking pendiente. Mandá primero la foto del sticker.')
     return doAssign(env, chatId, orderId, p.tracking_number)
   }
 
@@ -156,7 +156,7 @@ async function handleTextCommand(env, msg) {
   if (text.startsWith('/mensaje ')) {
     const rest = text.slice('/mensaje '.length).trim()
     const sp = rest.indexOf(' ')
-    if (sp < 1) return void tgSend(env, chatId, 'Uso: <code>/mensaje &lt;order_id&gt; &lt;texto&gt;</code>')
+    if (sp < 1) return tgSend(env, chatId, 'Uso: <code>/mensaje &lt;order_id&gt; &lt;texto&gt;</code>')
     return sendBuyerMessageManual(env, chatId, rest.slice(0, sp), rest.slice(sp + 1).trim())
   }
 
@@ -178,7 +178,7 @@ async function sendStart(env, chatId) {
 
 async function sendHistory(env, chatId, page = 0) {
   const all = await listOrders(env, 1000)
-  if (!all.length) return void tgSend(env, chatId, 'Tu historial está vacío todavía.', { reply_markup: MAIN_KB })
+  if (!all.length) return tgSend(env, chatId, 'Tu historial está vacío todavía.', { reply_markup: MAIN_KB })
   const PAGE = 8
   const pages = Math.ceil(all.length / PAGE)
   page = Math.max(0, Math.min(page, pages - 1))
@@ -220,26 +220,26 @@ async function sendPendingChoice(env, chatId, pending, data) {
 // Acciones del flujo de despacho (reutilizadas por comandos y botones inline).
 async function doConfirmYes(env, chatId) {
   const p = await getPending(env, chatId)
-  if (!p?.tracking_number) return void tgSend(env, chatId, 'No hay nada pendiente de confirmar. Mandá la foto del sticker.')
-  if (!p.order_id) return void tgSend(env, chatId, 'Elegí la orden de la lista.')
+  if (!p?.tracking_number) return tgSend(env, chatId, 'No hay nada pendiente de confirmar. Mandá la foto del sticker.')
+  if (!p.order_id) return tgSend(env, chatId, 'Elegí la orden de la lista.')
   return doAssign(env, chatId, p.order_id, p.tracking_number)
 }
 async function doConfirmNo(env, chatId) {
   const p = await getPending(env, chatId)
-  if (!p?.tracking_number) return void tgSend(env, chatId, 'Ok. Mandá la foto del sticker cuando quieras.')
+  if (!p?.tracking_number) return tgSend(env, chatId, 'Ok. Mandá la foto del sticker cuando quieras.')
   const { pending } = await findPendingMatches(env, p.recipient_name || '')
   await setPending(env, chatId, { tracking_number: p.tracking_number, recipient_name: p.recipient_name })
   return sendPendingChoice(env, chatId, pending, p)
 }
 async function doFinalize(env, chatId) {
   const p = await getPending(env, chatId)
-  if (p?.mode !== 'collect_evidence') return void tgSend(env, chatId, 'No hay un envío en curso. Mandá la foto del sticker para empezar.')
+  if (p?.mode !== 'collect_evidence') return tgSend(env, chatId, 'No hay un envío en curso. Mandá la foto del sticker para empezar.')
   return finalizeEvidence(env, chatId, p)
 }
 
 async function sendOrdersList(env, chatId) {
   const orders = await listOrders(env, 10)
-  if (!orders.length) return void tgSend(env, chatId, 'No hay órdenes registradas todavía.', { reply_markup: MAIN_KB })
+  if (!orders.length) return tgSend(env, chatId, 'No hay órdenes registradas todavía.', { reply_markup: MAIN_KB })
   const lines = orders.map(o =>
     `• <code>${o.order_id}</code> — ${statusEs(o.status)}\n   ${o.buyer_name} · ${o.product}` +
     (o.tracking_number ? `\n   🔖 ${o.tracking_number}` : ''))
@@ -250,7 +250,7 @@ async function sendOrdersList(env, chatId) {
 
 async function sendPendingList(env, chatId) {
   const pend = (await listOrders(env, 200)).filter(o => !o.tracking_number)
-  if (!pend.length) return void tgSend(env, chatId, '✅ No hay órdenes pendientes de tracking.', { reply_markup: MAIN_KB })
+  if (!pend.length) return tgSend(env, chatId, '✅ No hay órdenes pendientes de tracking.', { reply_markup: MAIN_KB })
   const slice = pend.slice(0, 20)
   const lines = slice.map(o => `• <code>${o.order_id}</code> — ${o.buyer_name} · ${o.product}`)
   await tgSend(env, chatId, `📭 <b>Pendientes de tracking (${pend.length})</b>\n\n${lines.join('\n')}\n\n📸 Mandá la foto del sticker para asignar.`, {
@@ -260,7 +260,7 @@ async function sendPendingList(env, chatId) {
 
 async function sendOrderDetail(env, chatId, id) {
   const o = await getOrder(env, id)
-  if (!o) return void tgSend(env, chatId, `No encontré la orden <code>${id}</code>.`, { reply_markup: MAIN_KB })
+  if (!o) return tgSend(env, chatId, `No encontré la orden <code>${id}</code>.`, { reply_markup: MAIN_KB })
   const body = [
     `🧾 <b>Orden</b> <code>${o.order_id}</code>`,
     `Estado: ${statusEs(o.status)}`,
@@ -281,13 +281,13 @@ async function sendOrderDetail(env, chatId, id) {
 }
 
 async function sendBuyerMessageManual(env, chatId, orderId, body) {
-  if (!body) return void tgSend(env, chatId, 'Falta el texto del mensaje.')
+  if (!body) return tgSend(env, chatId, 'Falta el texto del mensaje.')
   await tgSend(env, chatId, `📨 Enviando mensaje al comprador de la orden <code>${orderId}</code>…`)
   let ev
   try {
     ev = await sendBuyerEvidence(env, orderId, { text: body, photos: [] })
   } catch (e) {
-    return void tgSend(env, chatId, `❌ ${e.message}`)
+    return tgSend(env, chatId, `❌ ${e.message}`)
   }
   await tgSend(env, chatId, ev.msgOk ? '✅ Mensaje enviado al comprador.' : `⚠️ No se envió: ${ev.msgErr}`)
 }
@@ -319,18 +319,18 @@ async function handleCallback(env, cq) {
   if (data === 'mtmpl')          return sendTemplatesMenu(env, chatId)
   if (data.startsWith('tmpl:'))  return askTemplateOrder(env, chatId, data.slice(5))
   if (data === 'tsend')          return sendTemplateConfirmed(env, chatId)
-  if (data === 'tcancel')      { await clearPending(env, chatId); return void tgSend(env, chatId, 'Cancelado.', { reply_markup: MAIN_KB }) }
+  if (data === 'tcancel')      { await clearPending(env, chatId); return tgSend(env, chatId, 'Cancelado.', { reply_markup: MAIN_KB }) }
   if (data.startsWith('ver:'))  return sendOrderDetail(env, chatId, data.slice(4))
   if (data.startsWith('asg:')) {
     const id = data.slice(4)
     const p = await getPending(env, chatId)
-    if (!p?.tracking_number) return void tgSend(env, chatId, 'No hay tracking pendiente. Mandá primero la foto del sticker.')
+    if (!p?.tracking_number) return tgSend(env, chatId, 'No hay tracking pendiente. Mandá primero la foto del sticker.')
     return doAssign(env, chatId, id, p.tracking_number)
   }
   if (data.startsWith('msg:')) {
     const id = data.slice(4)
     await setPending(env, chatId, { mode: 'await_message', order_id: id })
-    return void tgSend(env, chatId, `✍️ Escribí el texto del mensaje para el comprador de la orden <code>${id}</code>:`)
+    return tgSend(env, chatId, `✍️ Escribí el texto del mensaje para el comprador de la orden <code>${id}</code>:`)
   }
 }
 
@@ -384,13 +384,13 @@ async function withMlGuard(env, chatId, fn) {
     return await fn()
   } catch (e) {
     if (e?.status === 403) {
-      return void tgSend(env, chatId,
+      return tgSend(env, chatId,
         '🔒 ML no autoriza leer órdenes con el token actual.\n' +
         'Re-autorizá la app (OAuth con scope <code>read</code>) para habilitar el historial.',
         { reply_markup: MAIN_KB })
     }
     logErr('ML historial:', e?.message)
-    return void tgSend(env, chatId, `❌ Error consultando ML: ${e?.message || e}`, { reply_markup: MAIN_KB })
+    return tgSend(env, chatId, `❌ Error consultando ML: ${e?.message || e}`, { reply_markup: MAIN_KB })
   }
 }
 
@@ -429,7 +429,7 @@ async function sendMlLast(env, chatId, offset = 0) {
   return withMlGuard(env, chatId, async () => {
     const PAGE = 10
     const { total, orders } = await getOrderHistory(env, { limit: PAGE, offset })
-    if (!orders.length) return void tgSend(env, chatId, 'No hay ventas en ese rango.', { reply_markup: MAIN_KB })
+    if (!orders.length) return tgSend(env, chatId, 'No hay ventas en ese rango.', { reply_markup: MAIN_KB })
     await attachReceiverNames(env, orders)   // nombre real de los que se muestran
     const lines = orders.map(fmtOrderLine)
     const nav = []
@@ -452,10 +452,10 @@ async function sendMlSearchPrompt(env, chatId) {
 
 // Ejecuta la búsqueda por comprador.
 async function runMlSearch(env, chatId, query) {
-  if (!query) return void tgSend(env, chatId, 'Falta el texto a buscar.', { reply_markup: MAIN_KB })
+  if (!query) return tgSend(env, chatId, 'Falta el texto a buscar.', { reply_markup: MAIN_KB })
   return withMlGuard(env, chatId, async () => {
     const orders = await searchOrderByBuyer(env, query)   // ya trae el nombre real
-    if (!orders.length) return void tgSend(env, chatId, `Sin resultados para “${query}”.`, { reply_markup: MAIN_KB })
+    if (!orders.length) return tgSend(env, chatId, `Sin resultados para “${query}”.`, { reply_markup: MAIN_KB })
     const top = orders.slice(0, 10)
     const lines = top.map(fmtOrderLine)
     const kb = ordersListMarkup(top)
@@ -472,7 +472,7 @@ async function sendMlRange(env, chatId, which) {
     const { from, to } = which === 'today' ? todayRange() : monthRange()
     const { total, orders } = await getOrdersByDateRange(env, from, to)
     const titulo = which === 'today' ? '📆 <b>Hoy</b>' : '📆 <b>Este mes</b>'
-    if (!orders.length) return void tgSend(env, chatId, `${titulo}\nSin ventas.`, { reply_markup: MAIN_KB })
+    if (!orders.length) return tgSend(env, chatId, `${titulo}\nSin ventas.`, { reply_markup: MAIN_KB })
     const totalCLP = orders
       .filter(o => (o.currency || 'CLP') === 'CLP')
       .reduce((s, o) => s + (Number(o.monto) || 0), 0)
@@ -513,7 +513,7 @@ async function sendMlDetail(env, chatId, orderId) {
 async function sendShipment(env, chatId, orderId) {
   return withMlGuard(env, chatId, async () => {
     const o = await getOrderDetail(env, orderId)
-    if (!o.shipment_id) return void tgSend(env, chatId, 'Esta orden no tiene envío asociado.', { reply_markup: MAIN_KB })
+    if (!o.shipment_id) return tgSend(env, chatId, 'Esta orden no tiene envío asociado.', { reply_markup: MAIN_KB })
     await tgSend(env, chatId, [
       `📦 <b>Envío</b> · Orden ${shortId(o.order_id)}`,
       `${statusEs(o.ship_status) || '—'}`,
@@ -529,7 +529,7 @@ async function sendShipment(env, chatId, orderId) {
 async function runReauth(env, chatId, code) {
   code = (code || '').trim()
   if (!/^TG-/i.test(code)) {
-    return void tgSend(env, chatId,
+    return tgSend(env, chatId,
       '🔑 Para reconectar con MercadoLibre:\n' +
       '1) Abre este enlace y acepta:\n' + buildAuthUrl(env) + '\n' +
       '2) Copia el <code>code</code> que aparece en la página y pégamelo acá.',
@@ -586,7 +586,7 @@ async function runShowConversation(env, chatId, orderId) {
   return withMlGuard(env, chatId, async () => {
     const { buyerFirst, messages } = await getConversation(env, orderId, 10)
     if (!messages.length) {
-      return void tgSend(env, chatId, `No hay mensajes en la conversación de la orden <code>${orderId}</code>.`, { reply_markup: MAIN_KB })
+      return tgSend(env, chatId, `No hay mensajes en la conversación de la orden <code>${orderId}</code>.`, { reply_markup: MAIN_KB })
     }
     const lines = messages.map(m => {
       const quien = m.from_seller ? '🟦 Tú' : `👤 ${buyerFirst}`
@@ -601,7 +601,7 @@ async function runShowConversation(env, chatId, orderId) {
 
 // Plantilla elegida → pide el N° de orden.
 async function askTemplateOrder(env, chatId, tmplKey) {
-  if (!TEMPLATES[tmplKey]) return void tgSend(env, chatId, 'Plantilla desconocida.')
+  if (!TEMPLATES[tmplKey]) return tgSend(env, chatId, 'Plantilla desconocida.')
   await setPending(env, chatId, { mode: 'await_tmpl_order', tmpl: tmplKey })
   await tgSend(env, chatId, `${TEMPLATE_LABELS[tmplKey]} — mándame el N° de orden al que enviar la plantilla:`)
 }
@@ -609,7 +609,7 @@ async function askTemplateOrder(env, chatId, tmplKey) {
 // Arma la vista previa con el nombre real del comprador y pide confirmación.
 async function previewTemplate(env, chatId, tmplKey, orderId) {
   const fn = TEMPLATES[tmplKey]
-  if (!fn) { await clearPending(env, chatId); return void tgSend(env, chatId, 'Plantilla desconocida.') }
+  if (!fn) { await clearPending(env, chatId); return tgSend(env, chatId, 'Plantilla desconocida.') }
   let nombre = 'cliente'
   try {
     const o = await getOrderDetail(env, orderId)
@@ -630,7 +630,7 @@ async function previewTemplate(env, chatId, tmplKey, orderId) {
 async function sendTemplateConfirmed(env, chatId) {
   const p = await getPending(env, chatId)
   if (p?.mode !== 'confirm_tmpl' || !p.order_id || !p.text) {
-    return void tgSend(env, chatId, 'No hay un mensaje pendiente de confirmar.', { reply_markup: MAIN_KB })
+    return tgSend(env, chatId, 'No hay un mensaje pendiente de confirmar.', { reply_markup: MAIN_KB })
   }
   await clearPending(env, chatId)
   await tgSend(env, chatId, `📨 Enviando a la orden <code>${p.order_id}</code>…`)
@@ -670,7 +670,7 @@ async function analyzeStickerPhoto(env, chatId, msg) {
     b64 = await tgGetFileBytes(env, photo.file_id)
   } catch (e) {
     logErr('descarga foto:', e.message)
-    return void tgSend(env, chatId, '❌ No pude descargar la imagen. Probá de nuevo.')
+    return tgSend(env, chatId, '❌ No pude descargar la imagen. Probá de nuevo.')
   }
 
   let data
@@ -678,16 +678,16 @@ async function analyzeStickerPhoto(env, chatId, msg) {
     data = await extractTrackingFromImage(b64, env.ANTHROPIC_API_KEY)
   } catch (e) {
     logErr('visión:', e.message)
-    return void tgSend(env, chatId, `❌ Error al leer la imagen: ${e.message}`)
+    return tgSend(env, chatId, `❌ Error al leer la imagen: ${e.message}`)
   }
 
   if (!data.tracking_number) {
-    return void tgSend(env, chatId, '⚠️ No pude leer el número de seguimiento. Mandá una foto más nítida del sticker.')
+    return tgSend(env, chatId, '⚠️ No pude leer el número de seguimiento. Mandá una foto más nítida del sticker.')
   }
 
   const { pending, best } = await findPendingMatches(env, data.recipient_name)
   if (pending.length === 0) {
-    return void tgSend(env, chatId,
+    return tgSend(env, chatId,
       `📦 Tracking leído: <code>${data.tracking_number}</code>\n` +
       `👤 Destinatario: ${data.recipient_name || '—'}\n\n` +
       'No hay órdenes pendientes de tracking ahora mismo.')
@@ -700,7 +700,7 @@ async function analyzeStickerPhoto(env, chatId, msg) {
       recipient_name:  data.recipient_name,
       order_id:        match.order_id,
     })
-    return void tgSend(env, chatId,
+    return tgSend(env, chatId,
       `📦 Tracking: <code>${data.tracking_number}</code>\n` +
       `👤 Destinatario leído: ${data.recipient_name || '—'}\n\n` +
       `¿Es la orden de <b>${match.buyer_name}</b> por <b>${match.product}</b>?`,
@@ -730,7 +730,7 @@ async function doAssign(env, chatId, orderId, tracking) {
   try {
     res = await assignTracking(env, orderId, tracking)
   } catch (e) {
-    return void tgSend(env, chatId, `❌ ${e.message}`)
+    return tgSend(env, chatId, `❌ ${e.message}`)
   }
   // Pasamos a recolectar fotos del empaque; el mensaje al comprador (tracking +
   // fotos) se envía al recibir /listo, vía la mensajería de ML (todo tipo de envío).
@@ -778,7 +778,7 @@ async function finalizeEvidence(env, chatId, p) {
     ev = await sendBuyerEvidence(env, p.order_id, { text, photos })
   } catch (e) {
     await clearPending(env, chatId)
-    return void tgSend(env, chatId, `❌ No se pudo enviar al comprador: ${e.message}`)
+    return tgSend(env, chatId, `❌ No se pudo enviar al comprador: ${e.message}`)
   }
 
   await clearPending(env, chatId)

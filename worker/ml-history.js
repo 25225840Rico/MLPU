@@ -23,10 +23,23 @@ const logErr   = (...a) => console.error('[ML-HISTORY]', ...a)
 const sleep    = (ms) => new Promise(r => setTimeout(r, ms))
 const isoML    = (d) => d.toISOString().replace('Z', '-00:00') // formato fecha que acepta ML
 
-async function mlGet(token, path) {
-  const r = await fetch(`${ML_API}${path}`, { headers: { Authorization: `Bearer ${token}` } })
-  const data = await r.json().catch(() => ({}))
-  return { ok: r.ok, status: r.status, data }
+// Lee de ML con reintento ante rate-limit (429) o indisponibilidad transitoria
+// (503). Respeta el header Retry-After si ML lo manda; si no, backoff
+// exponencial corto (0.3s, 0.6s, 1.2s). El bot dispara ráfagas de lecturas al
+// abrir el historial, así que sin esto el detalle de una venta caía con 429.
+async function mlGet(token, path, { retries = 3 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(`${ML_API}${path}`, { headers: { Authorization: `Bearer ${token}` } })
+    if ((r.status === 429 || r.status === 503) && attempt < retries) {
+      const ra = parseInt(r.headers.get('retry-after') || '', 10)
+      const waitMs = Number.isFinite(ra) ? ra * 1000 : Math.min(2000, 300 * 2 ** attempt)
+      log(`${r.status} en ${path}; reintento ${attempt + 1}/${retries} en ${waitMs}ms`)
+      await sleep(waitMs)
+      continue
+    }
+    const data = await r.json().catch(() => ({}))
+    return { ok: r.ok, status: r.status, data }
+  }
 }
 
 // Lanza un Error con .status para que el bot pueda detectar el 403 de permisos.
@@ -95,8 +108,9 @@ function mapOrder(order) {
 export async function attachReceiverNames(env, orders) {
   if (!orders?.length) return orders
   const token = await getValidAccessToken(env)
-  await Promise.all(orders.map(async (o) => {
+  await Promise.all(orders.map(async (o, i) => {
     if (!o.shipment_id) return
+    if (i) await sleep(i * 60)   // escalona la ráfaga para no gatillar el 429 de ML
     try {
       const s = await mlGet(token, `/shipments/${o.shipment_id}`)
       const rn = s.ok && s.data?.receiver_address?.receiver_name
