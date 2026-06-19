@@ -3,3 +3,10 @@ dist
 .env
 .env.local
 *.local
+
+# Cloudflare Wrangler (caché/estado local, no versionar)
+.wrangler/
+worker/.wrangler/
+
+# Carpeta de trabajo interna duplicada del worker
+worker/progress/

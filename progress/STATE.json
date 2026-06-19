@@ -1,23 +1,32 @@
 {
-  "phase": "production-stable",
-  "status": "handoff",
-  "last_session": "2026-06-04T00:00:00Z",
-  "last_commit": "f4793cc",
-  "next_step": "Usuario: ONBOARDING Paso1+2 para sembrar KV, luego probar modo automático y publicación real",
+  "phase": "modulo1-historial-en-curso",
+  "status": "blocked-by-ml-403 / diff-modulo1-aprobado-sin-aplicar",
+  "last_session": "2026-06-18T00:00:00Z",
+  "last_worker_version": "14934abe-5e4e-47f1-b5e2-874f97a7d22f",
+  "last_commit": "41b21dc (bot SIN commitear; cambios en working tree)",
+  "next_step": "Aplicar el diff del Modulo 1 a telegram-bot.js (import ml-history, MAIN_KB 📋 Historial/💬 Mensajes, await_search, callbacks hmenu/hlast/hsearch/hday/hmonth/vord/ship, funciones + withMlGuard). Compilar + wrangler deploy. Setear [vars] SELLER_ID=283388639 ML_SITE_ID=MLC. Luego Modulo 2 ml-messaging.js.",
   "open_tasks": [
-    "Sembrar sesión ML en KV (ONBOARDING una vez desde celular)",
-    "Probar modo automático batch end-to-end",
-    "Verificar score calidad en SUCCESS tras publicación real"
+    "Aplicar diff Modulo 1 a telegram-bot.js (aprobado por el usuario)",
+    "wrangler.toml: agregar [vars] SELLER_ID y ML_SITE_ID",
+    "Modulo 2: crear ml-messaging.js + boton 💬 Mensajes (submenu directo/conversacion/plantillas)",
+    "USUARIO: re-autorizar app ML con scope read para destrabar lectura de ordenes (403)"
   ],
-  "blockers": [],
-  "deferred": [
-    "PERF-02: separar imgsDisplay/imgsUpload",
-    "UX-02: modal confirmación Config con fotos activas",
-    "redirect_uri httpbin → URL propia",
-    "ONBOARDING simplificado"
+  "blockers": [
+    "ML 403 PolicyAgent en GET /orders/* con el token actual: bloquea historial y todo lo de ordenes hasta re-autorizar"
   ],
+  "done_this_session": [
+    "Fix ctx.waitUntil (respuestas del bot ya llegan)",
+    "Botonera reply+inline; Historial KV paginado; cron a */10 min",
+    "Borrada orden de prueba TEST-1001",
+    "Verificado callback ML bien configurado y Anthropic key OK",
+    "Creado ml-history.js (compila, no aplicado al bot aun)"
+  ],
+  "bot": "t.me/Pulicadorlibre_bot",
+  "telegram_chat_id": "1036420688",
+  "seller_id": "283388639",
   "worker_url": "https://mlpu-proxy.aronricocl.workers.dev",
-  "kv_id": "1f6324c3659d4388bec284825c2864be",
-  "repo": "https://github.com/25225840Rico/MLPU",
-  "app_url": "https://25225840rico.github.io/MLPU/"
+  "kv_ml_tokens": "1f6324c3659d4388bec284825c2864be",
+  "kv_ml_orders": "d72bf35159b54eabadffafc521c1562b",
+  "cron": "*/10 * * * *",
+  "repo": "https://github.com/25225840Rico/MLPU"
 }

@@ -2,6 +2,11 @@ name = "mlpu-proxy"
 main = "index.js"
 compatibility_date = "2024-01-01"
 
+# Variables públicas (no secretas) para el historial de ML (Módulo 1).
+[vars]
+SELLER_ID = "283388639"
+ML_SITE_ID = "MLC"
+
 # KV: almacena la sesión OAuth de ML (access_token + refresh_token).
 # Crear con:  wrangler kv namespace create ML_TOKENS
 # y pegar el id devuelto abajo.
@@ -9,6 +14,17 @@ compatibility_date = "2024-01-01"
 binding = "ML_TOKENS"
 id = "1f6324c3659d4388bec284825c2864be"
 
+# KV: órdenes de ML (estado de venta + tracking) para el bot de Telegram.
+[[kv_namespaces]]
+binding = "ML_ORDERS"
+id = "d72bf35159b54eabadffafc521c1562b"
+
+# Cron Trigger: seguimiento automático de envíos cada 10 minutos (Paso 4).
+[triggers]
+crons = ["*/10 * * * *"]
+
 # Secrets (NO van aquí, configurar con):
 #   wrangler secret put ML_CLIENT_ID
 #   wrangler secret put ML_CLIENT_SECRET
+#   wrangler secret put TELEGRAM_BOT_TOKEN
+#   wrangler secret put TELEGRAM_CHAT_ID

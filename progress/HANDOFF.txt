@@ -1,63 +1,116 @@
-HANDOFF — ML AutoPublisher
-Fecha: 2026-06-04
-HEAD: f4793cc
-App: https://25225840rico.github.io/MLPU/
-Worker: https://mlpu-proxy.aronricocl.workers.dev
-Repo: https://github.com/25225840Rico/MLPU
+HANDOFF — MLPU: Bot de Telegram post-venta ML — 2026-06-18 (sesión 2)
 
-=== OBJETIVO DEL PROYECTO ===
-App móvil React+Vite para publicar productos en MercadoLibre Chile.
-Dos usuarios (dueño + esposa Paola) publican en la misma cuenta ML.
-Token OAuth centralizado en Cloudflare Worker KV.
+OBJETIVO
+Bot de Telegram (dentro del Worker mlpu-proxy) para post-venta de MercadoLibre Chile:
+alertas de venta, asignar tracking por foto del sticker, mandar tracking+fotos del
+empaque al comprador por mensajería ML, seguimiento automático, historial de ventas,
+mensajería directa, y TODO operable por botonera. Reglas del usuario: NO tocar lógica
+existente; aditivo; módulos nuevos separados; mostrar diff y esperar OK antes de aplicar.
 
-=== ESTADO ACTUAL ===
-Sistema completo y en producción. Todos los bugs críticos corregidos.
-Último deploy: Worker f4793cc + frontend f4793cc en GitHub Pages.
+ARQUITECTURA
+Cloudflare Worker (serverless) + frontend React/Vite (GitHub Pages) + KV. Sin servidor
+Node ni BD. Bot = webhook Telegram (no polling) + Cron Trigger + KV. El Worker es la
+única fuente del token OAuth de ML.
 
-=== ÚLTIMO PASO COMPLETADO ===
-Commit f4793cc: reglas oficiales ML implementadas
-- Descripción en 2 pasos: POST /items sin description, luego POST /items/{id}/description
-- cleanTitle(): limpia títulos (sin símbolos, sin palabras prohibidas ML)
-- Descripción persuasiva: estructura gancho+beneficios+specs+CTA, sin HTML
-- Score de calidad en SUCCESS: GET /items/{id}/performance a los 3s
-- Hints de fotos en CAMERA (fondo blanco, 1200px, ángulos)
+DESPLIEGUE / ENTORNO
+- Proyecto: C:\Users\aronr\OneDrive\Escritorio\automl   ; Worker dir: .\worker
+- wrangler 4.102.0, logueado como aronricocl@gmail.com. Deploy MANUAL: cd worker && npx wrangler deploy
+- Worker URL: https://mlpu-proxy.aronricocl.workers.dev   (Version desplegada: 14934abe)
+- Bot: t.me/Pulicadorlibre_bot ; chat usuario = 1036420688 ; seller id = 283388639
+- Secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID=1036420688, ANTHROPIC_API_KEY, ML_CLIENT_ID, ML_CLIENT_SECRET
+- KV: ML_TOKENS=1f6324c3659d4388bec284825c2864be ; ML_ORDERS=d72bf35159b54eabadffafc521c1562b
+- Cron actual: */10 * * * * (cada 10 min)
+- git: repo 25225840Rico/MLPU rama main. Cambios del bot SOLO en working tree (sin commit).
 
-=== PRÓXIMO PASO EXACTO ===
-El usuario necesita:
-1. Abrir la app en su celular: https://25225840rico.github.io/MLPU/
-2. Ir a Config (⚙) → ONBOARDING
-3. Paso 1: tocar "Autorizar en MercadoLibre" → completar OAuth en ML
-4. Paso 2: pegar la URL de httpbin con el código → "Activar sesión en el Worker"
-5. Esto siembra el token en el KV del Worker (SOLO hay que hacerlo UNA vez)
-6. Luego pasar el link a Paola → ella entra directo (sesión compartida)
-7. Probar modo automático: toggle ⚡ en cámara → capturar varios productos → publicar lote
+BLOQUEADOR CRÍTICO (acción del usuario)
+ML devuelve 403 PolicyAgent en GET /orders/{id} y /orders/search (verificado en vivo con
+curl al proxy). El token del KV NO tiene permiso de lectura de órdenes. Por eso NINGÚN
+feature de órdenes funciona con datos reales (alertas, historial, tracking-match). /users/me
+y /applications SÍ funcionan. El callback de notificaciones YA está bien configurado en la
+app (notifications_callback_url=.../ml/notifications, topics orders_v2+shipments, verificado).
+FIX (usuario): re-autorizar la app (rehacer OAuth con scope read) para mint-ear token nuevo
+con permiso de órdenes y guardarlo en KV vía /ml/auth/init. Reintentar luego:
+  curl https://mlpu-proxy.aronricocl.workers.dev/ml/orders/2000003456789012   (403 ahora → 404 cuando se arregle)
 
-Si el usuario reporta bugs, los más probables son:
-- Token no sembrado → ver ONBOARDING paso 1+2
-- Score de calidad no aparece → endpoint /performance puede tardar o no existir en algunas categorías (falla silenciosa, OK)
-- Descripción vacía → fallback activo desde f4793cc
+ESTADO ACTUAL
+- Pasos 1-5 + evidencia (tracking+fotos por mensajería) + scheduler (cron 10min): DESPLEGADOS.
+- Bug ctx.waitUntil (las respuestas del bot no llegaban): CORREGIDO → handleTelegramWebhook ahora
+  hace `await work` antes del 200. Confirmado por el usuario que el bot ya responde.
+- Orden de prueba TEST-1001: BORRADA (KV de órdenes vacío, listo para datos reales).
+- Botonera: ReplyKeyboard MAIN_KB (etiquetas como texto, mapeadas en handleTextCommand) +
+  inline_keyboard con callback_data en handleCallback. Esquema callbacks: ord, pend, si, no,
+  fin, hist:<page>, ver:<id>, asg:<id>, msg:<id>.
 
-=== ARCHIVOS CLAVE ===
-src/App.jsx          — UI completa (~1700 líneas), publish(), publishBatch(), todos los screens
-src/agents/orchestrator.js — analyzeProduct, fillAttributesWithAI, cleanTitle
-src/CropScreen.jsx   — recortador canvas 1:1
-worker/index.js      — Cloudflare Worker: proxy OAuth, KV token, endpoints auth
-worker/wrangler.toml — config Worker: KV binding ML_TOKENS id=1f6324c3659d4388bec284825c2864be
+ÚLTIMO PASO COMPLETADO
+Módulo 1 (historial real desde ML): CREADO worker/ml-history.js (compila OK, no toca nada).
+Funciones: getOrderHistory({limit,offset,status}), getOrdersByDateRange(from,to) [pagina,
+delay 100ms], searchOrderByBuyer(query), getOrderDetail(orderId) [+shipment], getSellerId,
+todayRange/monthRange. Resuelve nombre comprador con GET /users/{id} (ME2), fallback nickname
+en 403. Lanza Error con .status para detectar 403. Log [ML-HISTORY].
+Se mostró al usuario el DIFF EXACTO para telegram-bot.js y el usuario aprobó aplicarlo.
 
-=== INFRAESTRUCTURA ===
-KV namespace: ML_TOKENS (id: 1f6324c3659d4388bec284825c2864be)
-Secrets en Cloudflare: ML_CLIENT_ID=3829359465845583, ML_CLIENT_SECRET (configurado)
-GitHub Pages: rama main, carpeta dist/ generada por vite build
+PROXIMO PASO EXACTO (al retomar)
+APLICAR el diff del Módulo 1 a worker/telegram-bot.js (aún NO aplicado):
+  ① import: agregar
+     import { getOrderHistory, getOrdersByDateRange, searchOrderByBuyer,
+              getOrderDetail, todayRange, monthRange } from './ml-history.js'
+  ② MAIN_KB: nueva fila [📋 Historial][💬 Mensajes]; quitar 📚 Historial; fila [ℹ️ Ayuda] sola.
+     isButtonLabel = (t)=>['📋 Historial','💬 Mensajes','🧾 Órdenes','📭 Pendientes','ℹ️ Ayuda'].includes(t)
+  ③ En handleTextCommand, tras el bloque await_message, agregar manejo await_search:
+     if (pend0?.mode==='await_search' && text && !text.startsWith('/') && !isButtonLabel(text)) {
+       await clearPending(env,chatId); return runMlSearch(env,chatId,text) }
+  ④ Routing: reemplazar la línea de '📚 Historial' por:
+     if (text==='📋 Historial') return sendHistoryMenu(env,chatId)
+     if (text==='💬 Mensajes')  return tgSend(env,chatId,'💬 Mensajería: se activa en el Módulo 2.',{reply_markup:MAIN_KB})
+     y agregar alias: if (text==='/historial') return sendMlLast(env,chatId,0)
+                      if (text.startsWith('/buscar ')) return runMlSearch(env,chatId,text.slice(8).trim())
+  ⑤ En handleCallback agregar:
+     if (data==='hmenu') return sendHistoryMenu(env,chatId)
+     if (data==='hsearch') return sendMlSearchPrompt(env,chatId)
+     if (data==='hday') return sendMlRange(env,chatId,'today')
+     if (data==='hmonth') return sendMlRange(env,chatId,'month')
+     if (data.startsWith('hlast:')) return sendMlLast(env,chatId,parseInt(data.slice(6),10)||0)
+     if (data.startsWith('vord:')) return sendMlDetail(env,chatId,data.slice(5))
+     if (data.startsWith('ship:')) return sendShipment(env,chatId,data.slice(5))
+  ⑥ Agregar funciones nuevas (junto a las send…): withMlGuard(env,chatId,fn) [si e.status===403
+     avisa "re-autorizá la app con scope read"], sendHistoryMenu (inline [📅 Últimas ventas]
+     [🔍 Buscar cliente][📆 Hoy][📆 Este mes] con callbacks hlast:0/hsearch/hday/hmonth),
+     sendMlLast(env,chatId,offset) [10 c/u, nav ◀/▶ hlast:<offset±10>, botones vord:<id>],
+     fmtOrderLine(o) ["#id | nombre | producto | $ | estado | fecha"], ordersListMarkup(orders)
+     [botones vord:<id>], sendMlSearchPrompt [setPending mode await_search], runMlSearch(query),
+     sendMlRange(which today|month) [usa getOrdersByDateRange + total $], sendMlDetail(orderId)
+     [detalle + botones [💬 Mensajear msg:<id>][📦 Ver envío ship:<id>][⬅️ Volver hmenu]],
+     sendShipment(orderId). Reusan statusEs/fmtMoney/setPending existentes.
+  Luego: validar `node node_modules/esbuild/bin/esbuild worker/index.js --bundle --format=esm
+  --outfile=/dev/null`, y `cd worker && npx wrangler deploy`.
+  Setear vars en wrangler.toml: [vars] SELLER_ID="283388639" ML_SITE_ID="MLC".
+  (El diff completo y el texto exacto está en el historial del chat anterior; las firmas de
+  ml-history.js ya existen en worker/ml-history.js.)
 
-=== CÓMO RETOMAR ===
-1. cd "C:\Users\aronr\OneDrive\Escritorio\automl"
-2. Leer este HANDOFF.txt
-3. git log --oneline -5 para ver el estado del repo
-4. Si hay cambios pendientes: npx vite build && git add . && git commit -m "..." && git push origin main
-5. Si hay cambios en worker/: cd worker && npx wrangler deploy
+DESPUÉS — MÓDULO 2 (mensajería directa, esperar OK del usuario por módulo)
+Crear worker/ml-messaging.js:
+  - sendMessageToBuyer(packId,text) → POST /marketplace/messages/packs/{packId} body {text,text_translated:""}
+    (endpoint que pidió el usuario; si pack_id null usar order_id; si IN_MODERATION avisar).
+  - getConversation(packId,sellerId) → GET /marketplace/messages/packs/{packId}/sellers/{sellerId}
+Botón 💬 Mensajes → submenu [✍️ Mensaje directo][💬 Ver conversación][📋 Plantillas].
+Plantillas: [📦 Despachado][🚚 En camino][✅ Recibido][⭐ Calificación], cada una pide order_id,
+inserta nombre automático, pide confirmación [✅ Confirmar][❌ Cancelar]. Log [ML-MSG].
+NO tocar messaging.js existente (el flujo de evidencia lo sigue usando).
 
-=== DIFERIDOS (no urgentes) ===
-- PERF-02: refactor imgsDisplay/imgsUpload (mayor)
-- UX-02: modal confirmación Config con fotos activas
-- redirect_uri httpbin.org → URL propia del usuario
-- ONBOARDING simplificado para usuarios finales
+ADVERTENCIAS YA CONOCIDAS
+- PUT tracking /shipments solo en envíos custom/a acordar; igual el tracking va por mensajería + KV.
+- Mensajería/adjuntos ML con reglas (ventanas, moderación). site_id MLC.
+- Mi shell Git Bash mangorna emojis/acentos en curl (UTF-8); el Worker maneja UTF-8 bien.
+
+ARCHIVOS CLAVE (worker/)
+- index.js: router /tg/webhook + /ml/notifications + scheduled(); exporta getValidAccessToken. (NO tocar salvo nada)
+- telegram-bot.js: dispatcher, botonera (MAIN_KB + handleCallback), comandos, flujo despacho. (SE TOCA: Módulo 1 y 2)
+- orders.js, tracking.js, messaging.js, scheduler.js: NO tocar.
+- ml-history.js: NUEVO (Módulo 1, listo). ml-messaging.js: por crear (Módulo 2).
+- wrangler.toml: KV bindings + [triggers] crons */10. Falta [vars] SELLER_ID/ML_SITE_ID.
+
+COMO RETOMAR
+Leer este HANDOFF + progress/CHECKPOINT.md. Verificar deploy:
+  curl -s -X POST -d '{}' https://mlpu-proxy.aronricocl.workers.dev/tg/webhook  → "ok"
+Continuar desde PROXIMO PASO EXACTO (aplicar diff Módulo 1). NO rehacer pasos 1-5 (desplegados).
+Para debug en vivo: cd worker && npx wrangler tail.

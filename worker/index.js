@@ -19,6 +19,10 @@
  *   - Secrets: ML_CLIENT_ID, ML_CLIENT_SECRET
  */
 
+import { handleTelegramWebhook } from './telegram-bot.js'
+import { recordOrderFromML } from './orders.js'
+import { runScheduled } from './scheduler.js'
+
 const ML_API = 'https://api.mercadolibre.com'
 const SESSION_KEY = 'ml_session'
 const REFRESH_MARGIN_S = 300 // renovar si quedan < 5 min
@@ -90,7 +94,7 @@ async function refreshSession(env, session) {
  * Devuelve un access_token vigente, renovando si está por expirar.
  * Re-lee KV justo antes de decidir (best-effort para 2 usuarios concurrentes).
  */
-async function getValidAccessToken(env, { force = false } = {}) {
+export async function getValidAccessToken(env, { force = false } = {}) {
   let session = await getSession(env)
   if (!session?.access_token) throw new Error('No hay sesión ML activa. Re-autoriza en Config.')
   if (force || secsLeft(session) < REFRESH_MARGIN_S) {
@@ -110,17 +114,26 @@ async function getValidAccessToken(env, { force = false } = {}) {
   return session.access_token
 }
 
-// ── Endpoint: POST /ml/auth/init ──────────────────────────────
-async function handleAuthInit(request, env) {
+// URL de autorización OAuth de ML (para re-autorizar cuando el token muere).
+// El redirect_uri debe coincidir con uno registrado en la app de ML.
+export const ML_REDIRECT_URI = 'https://httpbin.org/get'
+export function buildAuthUrl(env) {
+  const cid = env.ML_CLIENT_ID || ''
+  const scope = encodeURIComponent('offline_access read write')
+  return 'https://auth.mercadolibre.cl/authorization' +
+         `?response_type=code&client_id=${cid}` +
+         `&redirect_uri=${encodeURIComponent(ML_REDIRECT_URI)}&scope=${scope}`
+}
+
+/**
+ * Canjea un código OAuth (authorization_code) por la sesión y la guarda en KV.
+ * Reutilizable desde el endpoint HTTP y desde el bot de Telegram (/reauth).
+ * Lanza Error con mensaje claro si ML rechaza el código.
+ */
+export async function exchangeAuthCode(env, code, redirect_uri = ML_REDIRECT_URI) {
   if (!env.ML_CLIENT_ID || !env.ML_CLIENT_SECRET)
-    return json({ error: 'Faltan secrets ML_CLIENT_ID / ML_CLIENT_SECRET en el Worker' }, 500)
-
-  let payload
-  try { payload = await request.json() } catch { return json({ error: 'Body JSON inválido' }, 400) }
-
-  const code = (payload.code || '').trim()
-  const redirect_uri = payload.redirect_uri || 'https://httpbin.org/get'
-  if (!code) return json({ error: 'Falta el código OAuth (code)' }, 400)
+    throw new Error('Faltan secrets ML_CLIENT_ID / ML_CLIENT_SECRET en el Worker')
+  if (!code) throw new Error('Falta el código OAuth (code)')
 
   const body = new URLSearchParams({
     grant_type:    'authorization_code',
@@ -135,7 +148,7 @@ async function handleAuthInit(request, env) {
     body: body.toString(),
   })
   const data = await r.json()
-  if (!r.ok) return json({ error: data.message || data.error || `HTTP ${r.status}` }, r.status)
+  if (!r.ok) throw new Error(data.message || data.error || `HTTP ${r.status}`)
 
   const session = {
     access_token:  data.access_token,
@@ -144,7 +157,22 @@ async function handleAuthInit(request, env) {
     obtained_at:   Date.now(),
   }
   await putSession(env, session)
-  return json({ ok: true, expires_in: session.expires_in, secs_left: secsLeft(session) })
+  return { expires_in: session.expires_in, secs_left: secsLeft(session) }
+}
+
+// ── Endpoint: POST /ml/auth/init ──────────────────────────────
+async function handleAuthInit(request, env) {
+  let payload
+  try { payload = await request.json() } catch { return json({ error: 'Body JSON inválido' }, 400) }
+
+  const code = (payload.code || '').trim()
+  const redirect_uri = payload.redirect_uri || ML_REDIRECT_URI
+  try {
+    const res = await exchangeAuthCode(env, code, redirect_uri)
+    return json({ ok: true, ...res })
+  } catch (e) {
+    return json({ error: e.message }, 400)
+  }
 }
 
 // ── Endpoint: GET /ml/auth/status ─────────────────────────────
@@ -157,6 +185,60 @@ async function handleAuthStatus(env) {
     secs_left: left,
     expires_at: session.obtained_at + session.expires_in * 1000,
   })
+}
+
+// ── Endpoint: POST /ml/notifications (webhook de MercadoLibre) ─
+// ML envía solo { topic, resource, ... } sin los datos. Respondemos 200 al
+// instante y traemos la orden en segundo plano (ML reintenta si no hay 200).
+async function handleMlNotification(request, env, ctx) {
+  let note
+  try { note = await request.json() } catch { return json({ ok: true }) }
+
+  const topic    = note.topic || ''
+  const resource = note.resource || ''
+  console.log('[ML-BOT] notif topic=' + topic + ' resource=' + resource)
+
+  const work = (async () => {
+    try {
+      if (topic === 'orders_v2' && resource) {
+        await processOrderNotification(env, resource)
+      }
+      // 'shipments' y otros topics se manejarán en pasos siguientes.
+    } catch (e) {
+      console.error('[ML-BOT] notif error:', e.message)
+    }
+  })()
+  if (ctx?.waitUntil) ctx.waitUntil(work)
+  else await work
+
+  return json({ ok: true })
+}
+
+async function processOrderNotification(env, resource) {
+  const orderId = resource.split('/').filter(Boolean).pop()
+  const token = await getValidAccessToken(env)
+
+  const r = await fetch(`${ML_API}/orders/${orderId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!r.ok) throw new Error(`GET /orders/${orderId} HTTP ${r.status}`)
+  const order = await r.json()
+
+  // Tipo de envío (best-effort; no bloquea la alerta si falla).
+  let shipment = null
+  const shipmentId = order.shipping?.id
+  if (shipmentId) {
+    try {
+      const sr = await fetch(`${ML_API}/shipments/${shipmentId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (sr.ok) shipment = await sr.json()
+    } catch (e) {
+      console.error('[ML-BOT] no se pudo leer shipment', shipmentId, e.message)
+    }
+  }
+
+  await recordOrderFromML(env, order, shipment)
 }
 
 // ── Proxy genérico con token inyectado ────────────────────────
@@ -213,12 +295,18 @@ async function handleProxy(request, env, mlPath, search) {
 
 // ── Router ────────────────────────────────────────────────────
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS })
     }
 
     const url = new URL(request.url)
+
+    // ── Bot de Telegram (webhook, aditivo; no interfiere con /ml/*) ──
+    if (url.pathname === '/tg/webhook' && request.method === 'POST') {
+      return handleTelegramWebhook(request, env, ctx)
+    }
+
     if (!url.pathname.startsWith('/ml/')) {
       return new Response('Not found', { status: 404 })
     }
@@ -237,10 +325,18 @@ export default {
       if (mlPath === '/auth/status' && request.method === 'GET') {
         return await handleAuthStatus(env)
       }
+      if (mlPath === '/notifications' && request.method === 'POST') {
+        return await handleMlNotification(request, env, ctx)
+      }
       // Resto: proxy con token inyectado desde KV.
       return await handleProxy(request, env, mlPath, url.search)
     } catch (e) {
       return json({ error: e.message || 'Error interno del Worker' }, 500)
     }
+  },
+
+  // Cron Trigger (cada 6 h): seguimiento automático de envíos (Paso 4).
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runScheduled(env))
   },
 }
