@@ -293,6 +293,34 @@ async function handleProxy(request, env, mlPath, search) {
   })
 }
 
+// ── Admin del webhook de Telegram ─────────────────────────────
+async function handleTgAdmin(request, env) {
+  const url = new URL(request.url)
+  const action = url.searchParams.get('action') || 'info'
+  const token = env.TELEGRAM_BOT_TOKEN
+  if (!token) return json({ error: 'Falta el secret TELEGRAM_BOT_TOKEN en el Worker' }, 500)
+
+  const tgBase = `https://api.telegram.org/bot${token}`
+  const hookUrl = `${url.origin}/tg/webhook`
+
+  if (action === 'set') {
+    const r = await fetch(`${tgBase}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: hookUrl,
+        allowed_updates: ['message', 'callback_query'],
+        drop_pending_updates: false,
+      }),
+    })
+    return json({ action: 'set', webhook: hookUrl, telegram: await r.json() })
+  }
+
+  // info (por defecto): no expone el token, solo el estado del webhook.
+  const r = await fetch(`${tgBase}/getWebhookInfo`)
+  return json({ action: 'info', telegram: await r.json() })
+}
+
 // ── Router ────────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
@@ -305,6 +333,15 @@ export default {
     // ── Bot de Telegram (webhook, aditivo; no interfiere con /ml/*) ──
     if (url.pathname === '/tg/webhook' && request.method === 'POST') {
       return handleTelegramWebhook(request, env, ctx)
+    }
+
+    // ── Admin del webhook de Telegram ──
+    // GET /tg/admin?action=info  → estado del webhook (getWebhookInfo)
+    // GET /tg/admin?action=set   → re-registra el webhook a este Worker
+    // Útil si el webhook se perdió (p. ej. al correr el bot en polling con el
+    // mismo token, que lo borra). Usa el secret TELEGRAM_BOT_TOKEN del Worker.
+    if (url.pathname === '/tg/admin' && request.method === 'GET') {
+      return handleTgAdmin(request, env)
     }
 
     if (!url.pathname.startsWith('/ml/')) {
