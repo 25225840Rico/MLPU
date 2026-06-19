@@ -21,17 +21,40 @@ const log    = (...a) => console.log('[ML-BOT]', ...a)
 const logErr = (...a) => console.error('[ML-BOT]', ...a)
 
 const HOURS_48_MS = 48 * 3600 * 1000
+// El aviso "en preparación" solo aplica a compras recientes: evita blastear
+// órdenes viejas que ya quedaron en KV cuando se despliega esta etapa.
+const PREP_MAX_AGE_MS = 5 * 24 * 3600 * 1000
+function isRecentOrder(fecha) {
+  const t = Date.parse(fecha || '')
+  return Number.isFinite(t) && (Date.now() - t) <= PREP_MAX_AGE_MS
+}
 
-// CTA persuasivo que se envía al comprador apenas el pedido queda ENTREGADO:
-// busca convertir al cliente en seguidor de Instagram y que suba una historia
-// con su producto (prueba social orgánica). Editá el texto acá si querés.
-// Mensaje ≤350 caracteres: la opción FREE_TEXT del Action Guide tiene
-// char_limit 350. Sin HTML (esto va a la mensajería de ML, no a Telegram).
-function igStoryCta(nombre) {
+// IMPORTANTE: estos textos van a la mensajería de ML (Action Guide), NO a
+// Telegram. Deben ir SIN HTML y con ≤350 caracteres (char_limit de la opción
+// FREE_TEXT). Editá el copy acá.
+
+// 1) Apenas se CONFIRMA el pago: aviso cálido de que el pedido está en
+//    preparación. Sin CTA todavía (no gastamos el cupo de inicio de ML en pedir
+//    nada); además suele hacer que el cliente responda, lo que desbloquea el
+//    cupo para los mensajes siguientes (en camino / entregado).
+function prepCta(nombre) {
   return (
-    `¡Hola ${nombre}! 🏁 Tu pedido de TopWheels ya llegó 🔥 Esperamos que te encante.\n\n` +
-    `¿Nos ayudas con 30 segundos? Síguenos en Instagram @topwheels.cl y sube una historia con tu pieza etiquetándonos 📸\n\n` +
-    `Sorteamos modelos entre quienes nos etiquetan. ¡Gracias por elegirnos! 🚗`
+    `¡Hola ${nombre}! 🏁 Recibimos tu compra en TopWheels y ya estamos ` +
+    `preparando tu pedido con todo el cuidado para despacharlo cuanto antes 📦\n\n` +
+    `Te aviso apenas salga en camino. ¡Gracias por tu confianza! 🚗💨`
+  )
+}
+
+// 2) Cuando el pedido queda ENTREGADO: el mensaje de engagement principal. Pide
+//    la reseña ⭐ y sumar al cliente como seguidor de Instagram, en un solo
+//    mensaje (un solo cupo de inicio).
+function deliveredEngagementCta(nombre) {
+  return (
+    `¡Hola ${nombre}! 🏁 Tu pedido de TopWheels ya llegó 🔥 Ojalá te encante.\n\n` +
+    `¿Nos regalas 1 minuto? 🙌\n` +
+    `⭐ Déjanos tu reseña en MercadoLibre, nos ayuda un montón.\n` +
+    `📸 Y síguenos en Instagram @topwheels.cl para novedades y sorteos.\n\n` +
+    `¡Gracias por elegirnos! 🚗`
   )
 }
 
@@ -142,18 +165,55 @@ export async function runScheduled(env) {
     return
   }
 
-  const eligible = orders.filter(rec =>
-    rec?.tracking_number && rec?.shipment_id && !rec.feedback_done)
+  // Elegibles: las que aún necesitan algún mensaje. Incluye las recién pagadas
+  // (para el aviso "en preparación", aunque todavía no tengan tracking) y las
+  // que ya tienen envío (para los avisos de en camino / entregado).
+  const eligible = orders.filter(rec => rec && !rec.feedback_done && (
+    (!rec.prep_msg_sent && (rec.status === 'paid' || rec.status === 'confirmed') && isRecentOrder(rec.fecha)) ||
+    (rec.tracking_number && rec.shipment_id)
+  ))
 
   let sellerId = null // se resuelve perezosamente, una sola vez
   let processed = 0
 
   for (const rec of eligible) {
     try {
-      const shipment = await fetchShipment(token, rec.shipment_id)
-      if (!shipment) continue // ya logueado en fetchShipment
+      // El envío puede no existir aún (orden recién pagada): no es un error.
+      const shipment = rec.shipment_id ? await fetchShipment(token, rec.shipment_id) : null
+      const status = shipment?.status || null // ready_to_ship | shipped | delivered | null
 
-      const status = shipment.status
+      // ── Etapa: pago confirmado → "en preparación" ──────────
+      // Solo mientras no se haya despachado (no lo mandamos en órdenes que ya
+      // entran al ciclo en camino o entregadas). Reintenta hasta que ML lo acepte.
+      if (!rec.prep_msg_sent && (rec.status === 'paid' || rec.status === 'confirmed')
+          && isRecentOrder(rec.fecha)
+          && status !== 'shipped' && status !== 'delivered') {
+        if (sellerId === null) sellerId = await fetchSellerId(token)
+        const nombrePrep = firstName(shipment?.receiver_address?.receiver_name || rec.buyer_name)
+        const prepRes = await sendBuyerMessage(env, token, {
+          packId:  rec.pack_id || rec.order_id,
+          sellerId,
+          buyerId: rec.buyer_id,
+          text:    prepCta(nombrePrep),
+        })
+        rec.prep_msg_sent = !!prepRes?.ok
+        if (prepRes?.ok) {
+          rec.prep_warned = false
+          await tgSend(env, env.TELEGRAM_CHAT_ID,
+            `📦 Orden <code>${rec.order_id}</code> (en preparación): ${msgStatusLine(prepRes)}`)
+        } else {
+          logErr('sendBuyerMessage (preparación) falló para orden', rec.order_id, prepRes?.error)
+          if (!rec.prep_warned) {
+            await tgSend(env, env.TELEGRAM_CHAT_ID,
+              `📦 Orden <code>${rec.order_id}</code> (en preparación): ${msgStatusLine(prepRes)}`)
+            rec.prep_warned = true
+          }
+        }
+        await saveOrder(env, rec)
+      }
+
+      // Sin envío todavía (recién pagada): nada más que seguir en esta orden.
+      if (!shipment) { processed++; continue }
 
       // ── Transición: en camino ──────────────────────────────
       // FIX A/B: el flag de "mensaje al comprador" se separa del aviso al
@@ -206,7 +266,7 @@ export async function runScheduled(env) {
           await saveOrder(env, rec)
         }
 
-        // 2) CTA de Instagram al comprador: reintentar hasta que salga.
+        // 2) Engagement al comprador (reseña ⭐ + seguir IG): reintentar hasta que salga.
         if (!rec.ig_cta_sent) {
           if (sellerId === null) sellerId = await fetchSellerId(token)
           const nombreIg = firstName(shipment?.receiver_address?.receiver_name || rec.buyer_name)
@@ -214,18 +274,18 @@ export async function runScheduled(env) {
             packId:   rec.pack_id || rec.order_id,
             sellerId,
             buyerId:  rec.buyer_id,
-            text:     igStoryCta(nombreIg),
+            text:     deliveredEngagementCta(nombreIg),
           })
           rec.ig_cta_sent = !!ctaRes?.ok
           if (ctaRes?.ok) {
             rec.ig_cta_warned = false
             await tgSend(env, env.TELEGRAM_CHAT_ID,
-              `📸 Orden <code>${rec.order_id}</code> (CTA Instagram): ${msgStatusLine(ctaRes)}`)
+              `⭐ Orden <code>${rec.order_id}</code> (reseña + IG): ${msgStatusLine(ctaRes)}`)
           } else {
-            logErr('sendBuyerMessage (CTA Instagram) falló para orden', rec.order_id, ctaRes?.error)
+            logErr('sendBuyerMessage (reseña + IG) falló para orden', rec.order_id, ctaRes?.error)
             if (!rec.ig_cta_warned) {
               await tgSend(env, env.TELEGRAM_CHAT_ID,
-                `📸 Orden <code>${rec.order_id}</code> (CTA Instagram): ${msgStatusLine(ctaRes)}`)
+                `⭐ Orden <code>${rec.order_id}</code> (reseña + IG): ${msgStatusLine(ctaRes)}`)
               rec.ig_cta_warned = true
             }
           }
