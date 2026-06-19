@@ -1,5 +1,5 @@
 # CHECKPOINT — MLPU + Bot de Telegram (post-venta ML)
-**Última sesión:** 2026-06-18 | **Worker Version:** 7cc65193 (desplegado) | **Estado:** Módulo 1 (historial real ML) APLICADO + desplegado; sigue bloqueado por permiso ML (403) hasta re-autorizar
+**Última sesión:** 2026-06-18 | **Worker Version:** 8f994be7 (desplegado) | **Estado:** Módulos 1 y 2 desplegados y funcionando con datos reales; permiso de órdenes RESUELTO; todo commiteado y pusheado a main.
 
 ## Estado
 Bot de Telegram dentro del Worker `mlpu-proxy` (webhook + Cron 10 min + KV). Bot `t.me/Pulicadorlibre_bot`, chat 1036420688.
@@ -27,6 +27,30 @@ ready_to_ship, tracking 713094097866. **El historial real (Módulo 1) ya funcion
 - `wrangler.toml`: [vars] SELLER_ID="283388639", ML_SITE_ID="MLC".
 - Sintaxis `node --check` OK en los 3 módulos. **Desplegado** (Version 7cc65193, vars bindeadas, webhook responde "ok"). Cambios SOLO en working tree (sin commit).
 
-## PRÓXIMO PASO
-1. **Módulo 2** (esperar OK del usuario): `worker/ml-messaging.js` — sendMessageToBuyer(packId,text) POST /marketplace/messages/packs/{pack}; getConversation. Botón 💬 Mensajes → submenu ✍️ directo / 💬 conversación / 📋 plantillas. NO tocar messaging.js. Hoy el botón 💬 Mensajes responde placeholder.
-2. **Re-autorización ML pendiente del usuario** (OAuth scope `read`): sin eso, todo el historial real responde 403 (withMlGuard ya avisa qué hacer). Probar luego: `curl .../ml/orders/<id>` debe pasar de 403 a 404/200.
+## Módulo 2 (mensajería directa) — COMPLETADO y desplegado
+- `worker/ml-messaging.js`: sendMessageToBuyer(env,orderId,text), getConversation(env,orderId),
+  TEMPLATES (despachado/en_camino/recibido/calificacion) + TEMPLATE_LABELS. Resuelve
+  seller/buyer/pack desde la orden. Reusa messaging.js (no lo toca). Verificado read-only: la
+  lectura de conversación responde 200 (pack_id correcto; nota: ML puede marcar la conversación
+  `blocked_by_conversation_initiated_by_seller_limited` según política, no es bug).
+- `telegram-bot.js`: botón 💬 Mensajes → submenú (✍️ directo / 💬 conversación / 📋 plantillas);
+  plantillas con vista previa + confirmación; estados await_msg_order/await_conv_order/
+  await_tmpl_order/confirm_tmpl. Panel /start actualizado a los menús nuevos.
+
+## Auto-renovación de token + re-auth desde Telegram — COMPLETADO
+- index.js: `exchangeAuthCode` y `buildAuthUrl` reutilizables. El refresh ya era automático
+  (getValidAccessToken + cron 10min). Ahora si el token cae, el scheduler avisa por Telegram
+  con la URL lista, y el usuario reconecta pegando el code en el chat (`/reauth` o pegar TG-...).
+
+## CTA Instagram post-venta — COMPLETADO
+- scheduler.js: al ENTREGAR, mensaje persuasivo al comprador para seguir @topwheels.cl y subir
+  historia (igStoryCta). Recordatorio de reseña a 48h enfocado en calificación. Textos en
+  español neutro/chileno (tuteo, sin voseo).
+
+## Git
+- Repo 25225840Rico/MLPU, rama main. Worker versionado por 1ª vez (antes solo working tree).
+- .gitignore: excluye .wrangler/ y worker/progress/. Sin secrets en el repo (van por wrangler secret).
+
+## PRÓXIMO PASO (futuro, opcional)
+- Probar en Telegram el flujo real de los menús 📋/💬 con una venta nueva.
+- Posible Módulo 3 (reclamos/Post Purchase) si se quiere; el permiso ya está activo.

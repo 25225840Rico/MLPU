@@ -166,10 +166,13 @@ async function handleTextCommand(env, msg) {
 // ── Botonera + acciones (reutilizadas por comandos y botones inline) ──
 async function sendStart(env, chatId) {
   await tgSend(env, chatId,
-    '✅ <b>Bot MLPU activo.</b>\n\n' +
-    'Todo con botones 👇\n' +
-    '🧾 Órdenes · 📭 Pendientes · 📚 Historial\n' +
-    '📸 Para despachar: mandá la foto del sticker y seguí los botones.',
+    '✅ <b>Bot MLPU actualizado y operativo.</b>\n\n' +
+    'Ya puedes usar todo desde los botones 👇\n' +
+    '🧾 Órdenes · 📭 Pendientes\n' +
+    '📋 Historial — ventas reales de ML (buscar cliente, hoy, este mes)\n' +
+    '💬 Mensajes — directo, ver conversación y plantillas\n\n' +
+    '📸 Para despachar: envía la foto del sticker y sigue los botones.\n' +
+    '🔑 Si alguna vez se corta la conexión con ML, te aviso por acá y reconectas pegando el código.',
     { reply_markup: MAIN_KB })
 }
 
