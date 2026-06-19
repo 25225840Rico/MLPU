@@ -14,6 +14,7 @@ import { getValidAccessToken, buildAuthUrl } from './index.js'
 import { listOrders, saveOrder } from './orders.js'
 import { tgSend } from './telegram-bot.js'
 import { sendBuyerMessage } from './messaging.js'
+import { firstName } from './ml-history.js'
 
 const ML_API = 'https://api.mercadolibre.com'
 const log    = (...a) => console.log('[ML-BOT]', ...a)
@@ -175,7 +176,8 @@ export async function runScheduled(env) {
           // Mensaje persuasivo al comprador: seguir en Instagram + subir historia
           // con el producto (prueba social orgánica). Se manda 1 sola vez.
           if (sellerId === null) sellerId = await fetchSellerId(token)
-          const nombreIg = (rec.buyer_name || 'cliente').split(' ')[0]
+          // Solo el primer nombre real (del destinatario del envío).
+          const nombreIg = firstName(shipment?.receiver_address?.receiver_name || rec.buyer_name)
           const ctaRes = await sendBuyerMessage(env, token, {
             packId:   rec.pack_id || rec.order_id,
             sellerId,
@@ -196,7 +198,7 @@ export async function runScheduled(env) {
 
           // b) Recordatorio de reseña al comprador.
           if (sellerId === null) sellerId = await fetchSellerId(token)
-          const nombre = (rec.buyer_name || 'cliente').split(' ')[0]
+          const nombre = firstName(shipment?.receiver_address?.receiver_name || rec.buyer_name)
           const recordatorio =
             `Hola ${nombre}, ¡gracias por tu compra! 🙌 Si quedaste conforme, te agradeceríamos un montón ` +
             'tu calificación ⭐ en MercadoLibre: nos ayuda muchísimo a seguir creciendo. ¡Que lo disfrutes! 🚗'

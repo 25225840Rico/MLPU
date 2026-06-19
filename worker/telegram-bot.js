@@ -14,7 +14,7 @@ import { sendBuyerEvidence } from './messaging.js'
 import { listOrders, getOrder } from './orders.js'
 import {
   getOrderHistory, getOrdersByDateRange, searchOrderByBuyer,
-  getOrderDetail, todayRange, monthRange,
+  getOrderDetail, todayRange, monthRange, attachReceiverNames, firstName,
 } from './ml-history.js'
 import { sendMessageToBuyer, getConversation, TEMPLATES, TEMPLATE_LABELS } from './ml-messaging.js'
 import { exchangeAuthCode, buildAuthUrl } from './index.js'
@@ -394,15 +394,23 @@ async function withMlGuard(env, chatId, fn) {
   }
 }
 
-// Línea compacta de una orden ML: 2 líneas, monto destacado, id corto.
-function fmtOrderLine(o) {
-  return `${estadoIcon(o.estado)} <b>${fmtMoney(o.monto, o.currency)}</b> · ${o.buyer_name || o.buyer_nickname || '—'} · ${fechaCorta(o.fecha)}\n` +
-         `   ${truncar(o.producto)} · <code>${shortId(o.order_id)}</code>`
+// Nombre a mostrar: el real si existe, si no un genérico (nunca el nickname feo).
+function nombreCliente(o) {
+  const n = (o.buyer_name || '').trim()
+  // Si quedó el nickname (sin espacios y con dígitos), mejor "Cliente".
+  if (!n || (/\d/.test(n) && !n.includes(' '))) return 'Cliente'
+  return n
 }
 
-// Botones [id corto · comprador] por cada orden de la lista (id completo en callback_data).
+// Línea de una venta: 2 líneas simples y humanas (nombre + monto / producto + fecha).
+function fmtOrderLine(o) {
+  return `${estadoIcon(o.estado)} <b>${nombreCliente(o)}</b> · ${fmtMoney(o.monto, o.currency)}\n` +
+         `   ${truncar(o.producto, 34)} · ${fechaCorta(o.fecha)}`
+}
+
+// Botón por venta: nombre + monto (el order_id completo va en callback_data).
 function ordersListMarkup(orders) {
-  return orders.map(o => [{ text: `${shortId(o.order_id)} · ${truncar(o.buyer_name || o.buyer_nickname || '—', 18)}`, callback_data: `vord:${o.order_id}` }])
+  return orders.map(o => [{ text: `${estadoIcon(o.estado)} ${truncar(nombreCliente(o), 20)} · ${fmtMoney(o.monto, o.currency)}`, callback_data: `vord:${o.order_id}` }])
 }
 
 // Menú raíz del historial.
@@ -422,6 +430,7 @@ async function sendMlLast(env, chatId, offset = 0) {
     const PAGE = 10
     const { total, orders } = await getOrderHistory(env, { limit: PAGE, offset })
     if (!orders.length) return void tgSend(env, chatId, 'No hay ventas en ese rango.', { reply_markup: MAIN_KB })
+    await attachReceiverNames(env, orders)   // nombre real de los que se muestran
     const lines = orders.map(fmtOrderLine)
     const nav = []
     if (offset > 0)                 nav.push({ text: '◀ Anterior',  callback_data: `hlast:${Math.max(0, offset - PAGE)}` })
@@ -430,8 +439,7 @@ async function sendMlLast(env, chatId, offset = 0) {
     kb.push([{ text: '⬅️ Menú historial', callback_data: 'hmenu' }])
     if (nav.length) kb.push(nav)
     await tgSend(env, chatId,
-      `📅 <b>Últimas ventas</b>\n` +
-      `<i>${total} ventas · viendo ${offset + 1}–${offset + orders.length}</i>\n\n${lines.join('\n')}`,
+      `📅 <b>Últimas ventas</b>  <i>(${total})</i>\n\n${lines.join('\n')}`,
       { reply_markup: { inline_keyboard: kb } })
   })
 }
@@ -446,14 +454,14 @@ async function sendMlSearchPrompt(env, chatId) {
 async function runMlSearch(env, chatId, query) {
   if (!query) return void tgSend(env, chatId, 'Falta el texto a buscar.', { reply_markup: MAIN_KB })
   return withMlGuard(env, chatId, async () => {
-    const orders = await searchOrderByBuyer(env, query)
+    const orders = await searchOrderByBuyer(env, query)   // ya trae el nombre real
     if (!orders.length) return void tgSend(env, chatId, `Sin resultados para “${query}”.`, { reply_markup: MAIN_KB })
-    const lines = orders.slice(0, 10).map(fmtOrderLine)
-    const kb = ordersListMarkup(orders.slice(0, 10))
+    const top = orders.slice(0, 10)
+    const lines = top.map(fmtOrderLine)
+    const kb = ordersListMarkup(top)
     kb.push([{ text: '⬅️ Menú historial', callback_data: 'hmenu' }])
     await tgSend(env, chatId,
-      `🔍 <b>Resultados:</b> “${query}”\n` +
-      `<i>${orders.length} encontradas</i>\n\n${lines.join('\n')}`,
+      `🔍 <b>${query}</b>  <i>(${orders.length})</i>\n\n${lines.join('\n')}`,
       { reply_markup: { inline_keyboard: kb } })
   })
 }
@@ -468,11 +476,13 @@ async function sendMlRange(env, chatId, which) {
     const totalCLP = orders
       .filter(o => (o.currency || 'CLP') === 'CLP')
       .reduce((s, o) => s + (Number(o.monto) || 0), 0)
-    const lines = orders.slice(0, 15).map(fmtOrderLine)
-    const kb = ordersListMarkup(orders.slice(0, 15))
+    const top = orders.slice(0, 15)
+    await attachReceiverNames(env, top)   // nombre real de los que se muestran
+    const lines = top.map(fmtOrderLine)
+    const kb = ordersListMarkup(top)
     kb.push([{ text: '⬅️ Menú historial', callback_data: 'hmenu' }])
     await tgSend(env, chatId,
-      `${titulo}\n💰 <b>Total: ${fmtMoney(totalCLP, 'CLP')}</b> · ${total} venta(s)\n\n${lines.join('\n')}` +
+      `${titulo} · 💰 <b>${fmtMoney(totalCLP, 'CLP')}</b>  <i>(${total})</i>\n\n${lines.join('\n')}` +
       (orders.length > 15 ? `\n\n…y ${orders.length - 15} más.` : ''),
       { reply_markup: { inline_keyboard: kb } })
   })
@@ -483,15 +493,14 @@ async function sendMlDetail(env, chatId, orderId) {
   return withMlGuard(env, chatId, async () => {
     const o = await getOrderDetail(env, orderId)
     const body = [
-      `🧾 <b>Orden ${shortId(o.order_id)}</b>`,
+      `🧾 <b>${nombreCliente(o)}</b>`,
       `${estadoIcon(o.estado)} ${statusEs(o.estado)}`,
-      `👤 ${o.buyer_name || o.buyer_nickname || '—'}`,
       `📦 ${o.producto}${o.cantidad > 1 ? ` ×${o.cantidad}` : ''}`,
       `💰 <b>${fmtMoney(o.monto, o.currency)}</b>`,
       o.ship_status ? `🚚 ${statusEs(o.ship_status)}` : null,
       `🔖 ${o.tracking_number ? `<code>${o.tracking_number}</code>` : 'sin tracking aún'}`,
       `🕒 ${fechaCorta(o.fecha)}`,
-      `<i>N° ${o.order_id}</i>`,
+      `<i>N° de orden: ${o.order_id}</i>`,
     ].filter(Boolean).join('\n')
     const kb = [[{ text: '💬 Mensajear', callback_data: `msg:${o.order_id}` }]]
     if (o.shipment_id) kb.push([{ text: '📦 Ver envío', callback_data: `ship:${o.order_id}` }])
@@ -604,7 +613,8 @@ async function previewTemplate(env, chatId, tmplKey, orderId) {
   let nombre = 'cliente'
   try {
     const o = await getOrderDetail(env, orderId)
-    nombre = (o.buyer_name || o.buyer_nickname || 'cliente').split(' ')[0]
+    const real = nombreCliente(o)             // 'Cliente' si solo hay nickname
+    if (real !== 'Cliente') nombre = firstName(real)
   } catch { /* sin nombre: usa genérico */ }
   const texto = fn(nombre)
   await setPending(env, chatId, { mode: 'confirm_tmpl', order_id: orderId, text: texto })

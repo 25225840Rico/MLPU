@@ -47,30 +47,29 @@ export async function getSellerId(env, token) {
   return _sellerId
 }
 
-// ── Resolver nombre del comprador (cache para no repetir GET /users/{id}) ──
-const _buyerCache = new Map()
-async function resolveBuyerName(token, buyer = {}) {
-  const direct = [buyer.first_name, buyer.last_name].filter(Boolean).join(' ').trim()
-  if (direct) return direct
-  const nick = buyer.nickname || 'Comprador'
-  if (!buyer.id) return nick
-  if (_buyerCache.has(buyer.id)) return _buyerCache.get(buyer.id)
+// "carolina godoy" → "Carolina Godoy". Soporta acentos.
+function titleCase(s) {
+  return String(s || '').toLowerCase().replace(/\b\p{L}/gu, c => c.toUpperCase()).trim()
+}
 
-  // 2ª llamada: en ME2 el nombre no viene en /orders.
-  const u = await mlGet(token, `/users/${buyer.id}`)
-  let name = nick
-  if (u.ok) {
-    name = [u.data.first_name, u.data.last_name].filter(Boolean).join(' ').trim() || u.data.nickname || nick
-  } else if (u.status === 403) {
-    log(`/users/${buyer.id} 403 → uso nickname (ML restringe datos personales)`)
-  }
-  _buyerCache.set(buyer.id, name)
-  return name
+// Solo el primer nombre, capitalizado: "carolina andrea godoy" → "Carolina".
+// Para los mensajes personalizados al cliente (sin apellido).
+export function firstName(nombre) {
+  return titleCase(String(nombre || '').trim().split(/\s+/)[0] || 'cliente')
+}
+
+// Nombre base del comprador a partir de la orden (rápido, sin llamadas extra).
+// El nombre completo del search casi nunca viene; queda el nickname como base y
+// luego attachReceiverNames() lo reemplaza por el nombre real del envío.
+function baseBuyerName(buyer = {}) {
+  const direct = [buyer.first_name, buyer.last_name].filter(Boolean).join(' ').trim()
+  return direct || buyer.nickname || 'Comprador'
 }
 
 // ── Map de orden ML → forma compacta que usa el bot ──
 function mapOrder(order) {
   const item = order.order_items?.[0] || {}
+  const b = order.buyer || {}
   return {
     order_id:        String(order.id),
     pack_id:         order.pack_id ?? null,
@@ -80,19 +79,30 @@ function mapOrder(order) {
     cantidad:        item.quantity || 1,
     monto:           order.total_amount ?? null,
     currency:        order.currency_id || 'CLP',
-    buyer_id:        order.buyer?.id ?? null,
-    buyer_nickname:  order.buyer?.nickname || null,
+    buyer_id:        b.id ?? null,
+    buyer_nickname:  b.nickname || null,
+    buyer_name:      baseBuyerName(b),
     shipment_id:     order.shipping?.id ?? null,
     tracking_number: null,         // ML no lo entrega en /orders; se trae del shipment
-    _buyer:          order.buyer || {},
   }
 }
 
-async function resolveNamesInPlace(token, orders) {
-  for (const o of orders) {
-    o.buyer_name = await resolveBuyerName(token, o._buyer)
-    delete o._buyer
-  }
+/**
+ * Reemplaza buyer_name por el NOMBRE REAL del destinatario (receiver_name del
+ * envío) para las órdenes dadas. Una llamada por envío, en paralelo. Pensado
+ * para enriquecer solo las órdenes que se van a mostrar (eficiente). In-place.
+ */
+export async function attachReceiverNames(env, orders) {
+  if (!orders?.length) return orders
+  const token = await getValidAccessToken(env)
+  await Promise.all(orders.map(async (o) => {
+    if (!o.shipment_id) return
+    try {
+      const s = await mlGet(token, `/shipments/${o.shipment_id}`)
+      const rn = s.ok && s.data?.receiver_address?.receiver_name
+      if (rn) o.buyer_name = titleCase(rn)
+    } catch { /* deja el nombre base */ }
+  }))
   return orders
 }
 
@@ -107,7 +117,6 @@ export async function getOrderHistory(env, { limit = 50, offset = 0, status = nu
 
   const total  = res.data.paging?.total ?? 0
   const orders = (res.data.results || []).map(mapOrder)
-  if (resolveNames) await resolveNamesInPlace(token, orders)
   log(`historial: ${orders.length}/${total} (offset ${offset})`)
   return { total, orders }
 }
@@ -133,13 +142,13 @@ export async function getOrdersByDateRange(env, fromDate, toDate) {
     if (!batch.length) break
     if (offset < total) await sleep(100) // rate limit
   }
-  await resolveNamesInPlace(token, all)
   return { total: all.length, orders: all }
 }
 
 // ── Buscar por nombre/nickname del comprador (filtra sobre el historial reciente) ──
 export async function searchOrderByBuyer(env, query) {
   const { orders } = await getOrderHistory(env, { limit: 50, offset: 0 })
+  await attachReceiverNames(env, orders)   // resolver nombre real para poder buscar por él
   const q = (query || '').toLowerCase().trim()
   return orders.filter(o =>
     (o.buyer_name || '').toLowerCase().includes(q) ||
@@ -152,13 +161,13 @@ export async function getOrderDetail(env, orderId) {
   const res = await mlGet(token, `/orders/${orderId}`)
   if (!res.ok) throw httpError(`/orders/${orderId}`, res)
   const o = mapOrder(res.data)
-  o.buyer_name = await resolveBuyerName(token, res.data.buyer)
-  delete o._buyer
   if (o.shipment_id) {
     const s = await mlGet(token, `/shipments/${o.shipment_id}`)
     if (s.ok) {
-      o.ship_status      = s.data.status || null
-      o.tracking_number  = s.data.tracking_number || null
+      o.ship_status     = s.data.status || null
+      o.tracking_number = s.data.tracking_number || null
+      const rn = s.data.receiver_address?.receiver_name
+      if (rn) o.buyer_name = titleCase(rn)   // nombre real del destinatario
     }
   }
   return o
