@@ -348,6 +348,32 @@ function fmtMoney(n, cur) {
   return cur === 'CLP' ? `$${v.toLocaleString('es-CL')}` : `${v} ${cur || ''}`.trim()
 }
 
+// '#' + últimos 6 dígitos del order_id (el id completo va siempre en callback_data).
+function shortId(id) {
+  const s = String(id || '')
+  return '#' + s.slice(-6)
+}
+// "18 jun" en español. iso nulo/invalido → ''.
+function fechaCorta(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('es-CL', { day: 'numeric', month: 'short' }).replace('.', '')
+}
+// Emoji semáforo según estado de la orden.
+function estadoIcon(estado) {
+  const m = {
+    paid: '🟢', confirmed: '🟢', shipped: '🔵', delivered: '✅',
+    cancelled: '❌', payment_required: '⏳', payment_in_process: '⏳',
+  }
+  return m[estado] || '⚪'
+}
+// Corta texto a n chars y agrega '…' si excede.
+function truncar(texto, n = 32) {
+  const s = String(texto || '')
+  return s.length > n ? s.slice(0, n).trimEnd() + '…' : s
+}
+
 // ── Módulo 1: Historial real desde ML ─────────────────────────
 // Las órdenes vienen de ml-history.js con campos: order_id, fecha, estado,
 // producto, cantidad, monto, currency, buyer_name, shipment_id, tracking_number.
@@ -368,16 +394,15 @@ async function withMlGuard(env, chatId, fn) {
   }
 }
 
-// Línea compacta de una orden ML.
+// Línea compacta de una orden ML: 2 líneas, monto destacado, id corto.
 function fmtOrderLine(o) {
-  const fecha = (o.fecha || '').slice(0, 10)
-  return `• <code>${o.order_id}</code> · ${o.buyer_name || o.buyer_nickname || '—'} · ${o.producto}\n` +
-         `   ${fmtMoney(o.monto, o.currency)} · ${statusEs(o.estado)}${fecha ? ` · ${fecha}` : ''}`
+  return `${estadoIcon(o.estado)} <b>${fmtMoney(o.monto, o.currency)}</b> · ${o.buyer_name || o.buyer_nickname || '—'} · ${fechaCorta(o.fecha)}\n` +
+         `   ${truncar(o.producto)} · <code>${shortId(o.order_id)}</code>`
 }
 
-// Botones [🔎 abrir] por cada orden de la lista.
+// Botones [id corto · comprador] por cada orden de la lista (id completo en callback_data).
 function ordersListMarkup(orders) {
-  return orders.map(o => [{ text: `🔎 ${o.order_id} · ${o.buyer_name || o.buyer_nickname || '—'}`, callback_data: `vord:${o.order_id}` }])
+  return orders.map(o => [{ text: `${shortId(o.order_id)} · ${truncar(o.buyer_name || o.buyer_nickname || '—', 18)}`, callback_data: `vord:${o.order_id}` }])
 }
 
 // Menú raíz del historial.
@@ -405,8 +430,8 @@ async function sendMlLast(env, chatId, offset = 0) {
     kb.push([{ text: '⬅️ Menú historial', callback_data: 'hmenu' }])
     if (nav.length) kb.push(nav)
     await tgSend(env, chatId,
-      `📅 <b>Últimas ventas</b> — ${total} en total\n` +
-      `Mostrando ${offset + 1}–${offset + orders.length}\n\n${lines.join('\n')}`,
+      `📅 <b>Últimas ventas</b>\n` +
+      `<i>${total} ventas · viendo ${offset + 1}–${offset + orders.length}</i>\n\n${lines.join('\n')}`,
       { reply_markup: { inline_keyboard: kb } })
   })
 }
@@ -427,7 +452,8 @@ async function runMlSearch(env, chatId, query) {
     const kb = ordersListMarkup(orders.slice(0, 10))
     kb.push([{ text: '⬅️ Menú historial', callback_data: 'hmenu' }])
     await tgSend(env, chatId,
-      `🔍 <b>Resultados para “${query}”</b> — ${orders.length}\n\n${lines.join('\n')}`,
+      `🔍 <b>Resultados:</b> “${query}”\n` +
+      `<i>${orders.length} encontradas</i>\n\n${lines.join('\n')}`,
       { reply_markup: { inline_keyboard: kb } })
   })
 }
@@ -437,8 +463,8 @@ async function sendMlRange(env, chatId, which) {
   return withMlGuard(env, chatId, async () => {
     const { from, to } = which === 'today' ? todayRange() : monthRange()
     const { total, orders } = await getOrdersByDateRange(env, from, to)
-    const titulo = which === 'today' ? '📆 Ventas de hoy' : '📆 Ventas de este mes'
-    if (!orders.length) return void tgSend(env, chatId, `${titulo}: sin ventas.`, { reply_markup: MAIN_KB })
+    const titulo = which === 'today' ? '📆 <b>Hoy</b>' : '📆 <b>Este mes</b>'
+    if (!orders.length) return void tgSend(env, chatId, `${titulo}\nSin ventas.`, { reply_markup: MAIN_KB })
     const totalCLP = orders
       .filter(o => (o.currency || 'CLP') === 'CLP')
       .reduce((s, o) => s + (Number(o.monto) || 0), 0)
@@ -446,7 +472,7 @@ async function sendMlRange(env, chatId, which) {
     const kb = ordersListMarkup(orders.slice(0, 15))
     kb.push([{ text: '⬅️ Menú historial', callback_data: 'hmenu' }])
     await tgSend(env, chatId,
-      `${titulo} — ${total} venta(s) · ${fmtMoney(totalCLP, 'CLP')}\n\n${lines.join('\n')}` +
+      `${titulo}\n💰 <b>Total: ${fmtMoney(totalCLP, 'CLP')}</b> · ${total} venta(s)\n\n${lines.join('\n')}` +
       (orders.length > 15 ? `\n\n…y ${orders.length - 15} más.` : ''),
       { reply_markup: { inline_keyboard: kb } })
   })
@@ -457,15 +483,15 @@ async function sendMlDetail(env, chatId, orderId) {
   return withMlGuard(env, chatId, async () => {
     const o = await getOrderDetail(env, orderId)
     const body = [
-      `🧾 <b>Orden</b> <code>${o.order_id}</code>`,
-      `Estado: ${statusEs(o.estado)}`,
+      `🧾 <b>Orden ${shortId(o.order_id)}</b>`,
+      `${estadoIcon(o.estado)} ${statusEs(o.estado)}`,
       `👤 ${o.buyer_name || o.buyer_nickname || '—'}`,
-      `📦 ${o.producto}${o.cantidad > 1 ? ` (x${o.cantidad})` : ''}`,
-      `💰 ${fmtMoney(o.monto, o.currency)}`,
-      o.ship_status ? `🚚 Envío: ${statusEs(o.ship_status)}` : null,
-      `🔖 Tracking: ${o.tracking_number ? `<code>${o.tracking_number}</code>` : '— (pendiente)'}`,
-      o.pack_id ? `Pack: <code>${o.pack_id}</code>` : null,
-      `🕒 ${(o.fecha || '—').slice(0, 19).replace('T', ' ')}`,
+      `📦 ${o.producto}${o.cantidad > 1 ? ` ×${o.cantidad}` : ''}`,
+      `💰 <b>${fmtMoney(o.monto, o.currency)}</b>`,
+      o.ship_status ? `🚚 ${statusEs(o.ship_status)}` : null,
+      `🔖 ${o.tracking_number ? `<code>${o.tracking_number}</code>` : 'sin tracking aún'}`,
+      `🕒 ${fechaCorta(o.fecha)}`,
+      `<i>N° ${o.order_id}</i>`,
     ].filter(Boolean).join('\n')
     const kb = [[{ text: '💬 Mensajear', callback_data: `msg:${o.order_id}` }]]
     if (o.shipment_id) kb.push([{ text: '📦 Ver envío', callback_data: `ship:${o.order_id}` }])
@@ -480,10 +506,10 @@ async function sendShipment(env, chatId, orderId) {
     const o = await getOrderDetail(env, orderId)
     if (!o.shipment_id) return void tgSend(env, chatId, 'Esta orden no tiene envío asociado.', { reply_markup: MAIN_KB })
     await tgSend(env, chatId, [
-      `📦 <b>Envío</b> de la orden <code>${o.order_id}</code>`,
-      `Estado: ${statusEs(o.ship_status) || '—'}`,
-      `🔖 Tracking: ${o.tracking_number ? `<code>${o.tracking_number}</code>` : '— (pendiente)'}`,
-      `Shipment: <code>${o.shipment_id}</code>`,
+      `📦 <b>Envío</b> · Orden ${shortId(o.order_id)}`,
+      `${statusEs(o.ship_status) || '—'}`,
+      `🔖 ${o.tracking_number ? `<code>${o.tracking_number}</code>` : 'sin tracking aún'}`,
+      `<i>Shipment ${o.shipment_id}</i>`,
     ].join('\n'), { reply_markup: { inline_keyboard: [[{ text: '⬅️ Volver', callback_data: `vord:${o.order_id}` }]] } })
   })
 }
