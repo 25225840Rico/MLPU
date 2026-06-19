@@ -40,6 +40,13 @@ export async function listOrders(env, limit = 10) {
   const recs = await Promise.all(ids.map(id => getOrder(env, id)))
   return recs.filter(Boolean)
 }
+// Borra TODAS las órdenes y el índice del KV (para "empezar de 0"). Devuelve cuántas.
+export async function clearAllOrders(env) {
+  const ids = await getIndex(env)
+  await Promise.all(ids.map(id => env.ML_ORDERS.delete(ORDER_KEY(id))))
+  await env.ML_ORDERS.delete(INDEX_KEY)
+  return ids.length
+}
 
 // ── Helpers de formato ────────────────────────────────────────
 function buyerName(buyer = {}) {

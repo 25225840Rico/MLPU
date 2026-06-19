@@ -23,6 +23,7 @@ import { handleTelegramWebhook } from './telegram-bot.js'
 import { recordOrderFromML } from './orders.js'
 import { runScheduled } from './scheduler.js'
 import { mlFetch } from './ml-fetch.js'
+import { runCatchup } from './backfill.js'
 
 const ML_API = 'https://api.mercadolibre.com'
 const SESSION_KEY = 'ml_session'
@@ -295,7 +296,7 @@ async function handleProxy(request, env, mlPath, search) {
 }
 
 // ── Admin del webhook de Telegram ─────────────────────────────
-async function handleTgAdmin(request, env) {
+async function handleTgAdmin(request, env, ctx) {
   const url = new URL(request.url)
   const action = url.searchParams.get('action') || 'info'
   const token = env.TELEGRAM_BOT_TOKEN
@@ -303,6 +304,14 @@ async function handleTgAdmin(request, env) {
 
   const tgBase = `https://api.telegram.org/bot${token}`
   const hookUrl = `${url.origin}/tg/webhook`
+
+  // Acción única: procesar ventas de este mes + el anterior por estado y limpiar
+  // el KV. Corre en segundo plano (puede tardar) y reporta el resumen por Telegram.
+  if (action === 'catchup') {
+    const work = runCatchup(env).catch(e => console.error('[ML-CATCHUP] error:', e.message))
+    if (ctx?.waitUntil) ctx.waitUntil(work); else await work
+    return json({ action: 'catchup', started: true, note: 'El resumen llega por Telegram al terminar.' })
+  }
 
   if (action === 'set') {
     const r = await fetch(`${tgBase}/setWebhook`, {
@@ -342,7 +351,7 @@ export default {
     // Útil si el webhook se perdió (p. ej. al correr el bot en polling con el
     // mismo token, que lo borra). Usa el secret TELEGRAM_BOT_TOKEN del Worker.
     if (url.pathname === '/tg/admin' && request.method === 'GET') {
-      return handleTgAdmin(request, env)
+      return handleTgAdmin(request, env, ctx)
     }
 
     if (!url.pathname.startsWith('/ml/')) {

@@ -38,7 +38,7 @@ function isRecentOrder(fecha) {
 //    preparación. Sin CTA todavía (no gastamos el cupo de inicio de ML en pedir
 //    nada); además suele hacer que el cliente responda, lo que desbloquea el
 //    cupo para los mensajes siguientes (en camino / entregado).
-function prepCta(nombre) {
+export function prepCta(nombre) {
   return (
     `¡Hola ${nombre}! 🏁 Recibimos tu compra en TopWheels y ya estamos ` +
     `preparando tu pedido con todo el cuidado para despacharlo cuanto antes 📦\n\n` +
@@ -49,7 +49,7 @@ function prepCta(nombre) {
 // 2) Cuando el pedido queda ENTREGADO: el mensaje de engagement principal. Pide
 //    la reseña ⭐ y sumar al cliente como seguidor de Instagram, en un solo
 //    mensaje (un solo cupo de inicio).
-function deliveredEngagementCta(nombre) {
+export function deliveredEngagementCta(nombre) {
   return (
     `¡Hola ${nombre}! 🏁 Tu pedido de TopWheels ya llegó 🔥 Ojalá te encante.\n\n` +
     `¿Nos regalas 1 minuto? 🙌\n` +
@@ -217,41 +217,14 @@ export async function runScheduled(env) {
       if (!shipment) { processed++; continue }
 
       // ── Transición: en camino ──────────────────────────────
-      // FIX A/B: el flag de "mensaje al comprador" se separa del aviso al
-      // vendedor y SOLO se marca cuando el mensaje realmente salió; si ML lo
-      // bloquea (cupo OTHER agotado) se reintenta en la próxima corrida y se
-      // avisa al vendedor una sola vez. Así no se pierde el mensaje en silencio.
+      // NO mandamos mensaje "en camino" al comprador: MercadoLibre ya envía ese
+      // aviso automáticamente (con el mismo dato de tracking), así que duplicarlo
+      // molesta. Solo avisamos al VENDEDOR por Telegram, una sola vez.
       if (status === 'shipped') {
-        // Aviso al vendedor: una sola vez.
         if (!rec.shipped_notified) {
           await tgSend(env, env.TELEGRAM_CHAT_ID,
             `🚚 Orden <code>${rec.order_id}</code> en camino (${rec.buyer_name}).`)
           rec.shipped_notified = true
-          await saveOrder(env, rec)
-        }
-        // Mensaje al comprador: reintentar hasta que ML lo acepte.
-        if (!rec.shipped_msg_sent) {
-          if (sellerId === null) sellerId = await fetchSellerId(token)
-          const fechaEstimada = estimatedDeliveryText(shipment)
-          const msgRes = await sendBuyerMessage(env, token, {
-            packId:   rec.pack_id || rec.order_id,
-            sellerId,
-            buyerId:  rec.buyer_id,
-            text:     `Tu pedido está en camino 🚚, llegada estimada: ${fechaEstimada}.`,
-          })
-          rec.shipped_msg_sent = !!msgRes?.ok
-          if (msgRes?.ok) {
-            rec.shipped_msg_warned = false
-            await tgSend(env, env.TELEGRAM_CHAT_ID,
-              `📨 Orden <code>${rec.order_id}</code> (en camino): ${msgStatusLine(msgRes)}`)
-          } else {
-            logErr('sendBuyerMessage (shipped) falló para orden', rec.order_id, msgRes?.error)
-            if (!rec.shipped_msg_warned) {
-              await tgSend(env, env.TELEGRAM_CHAT_ID,
-                `📨 Orden <code>${rec.order_id}</code> (en camino): ${msgStatusLine(msgRes)}`)
-              rec.shipped_msg_warned = true
-            }
-          }
           await saveOrder(env, rec)
         }
       }
