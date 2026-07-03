@@ -313,6 +313,15 @@ async function handleTgAdmin(request, env, ctx) {
     return json({ action: 'catchup', started: true, note: 'El resumen llega por Telegram al terminar.' })
   }
 
+  if (action === 'off') {
+    const r = await fetch(`${tgBase}/deleteWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ drop_pending_updates: true }),
+    })
+    return json({ action: 'off', telegram: await r.json() })
+  }
+
   if (action === 'set') {
     const r = await fetch(`${tgBase}/setWebhook`, {
       method: 'POST',
