@@ -191,6 +191,14 @@ async function handleTextCommand(env, msg) {
     await setPending(env, chatId, pend0)
     return sendCatalogPreview(env, chatId, pend0.draft)
   }
+  if (pend0?.mode === 'cat_qty' && text && !text.startsWith('/') && !isButtonLabel(text)) {
+    const qty = Math.round(Number(text.replace(/[.\s]/g, '')))
+    if (!qty || qty < 1 || qty > 9999) return tgSend(env, chatId, '❌ Cantidad inválida. Mandá solo el número, ej: <code>3</code>')
+    pend0.draft.qty = qty
+    pend0.mode = 'cat_confirm'
+    await setPending(env, chatId, pend0)
+    return sendCatalogPreview(env, chatId, pend0.draft)
+  }
 
   // Botonera (reply keyboard) ↔ mismas acciones que los comandos.
   if (text === 'ℹ️ Ayuda' || text === '/start' || text.startsWith('/start@')) return sendStart(env, chatId)
@@ -238,9 +246,10 @@ async function handleTextCommand(env, msg) {
 
 // ── Limpiar el chat ───────────────────────────────────────────
 // Telegram no expone un "borrar todo": se borra por rango de message_id hacia
-// atrás desde el mensaje actual. `deleteMessages` borra 1-100 de una y salta los
-// que no existen; si falla (algún mensaje no se puede borrar), cae a borrar uno
-// por uno ignorando los que Telegram no permita (mensajes ajenos > 48 h, etc.).
+// atrás desde el mensaje actual. `deleteMessages` falla COMPLETO si un solo id
+// del lote no se puede borrar (> 48 h, etc.), así que se borra en lotes chicos
+// y, si un lote falla, se cae a borrar ese lote uno por uno. Todo bajo un
+// presupuesto de llamadas para no agotar los subrequests del Worker (~50).
 async function clearChat(env, chatId, fromMessageId) {
   const upto = Number(fromMessageId) || 0
   if (!upto) return tgSend(env, chatId, '🧹 No pude limpiar (sin referencia de mensaje).', { reply_markup: MAIN_KB })
@@ -248,9 +257,14 @@ async function clearChat(env, chatId, fromMessageId) {
   const ids = []
   for (let id = upto; id > Math.max(0, upto - 100); id--) ids.push(id)
 
-  const bulk = await tgApi(env, 'deleteMessages', { chat_id: chatId, message_ids: ids })
-  if (!bulk?.ok) {
-    for (const id of ids) {
+  let budget = 40 // llamadas a la API de Telegram como máximo (deja margen para el mensaje final)
+  for (let i = 0; i < ids.length && budget > 0; i += 25) {
+    const chunk = ids.slice(i, i + 25)
+    budget--
+    const bulk = await tgApi(env, 'deleteMessages', { chat_id: chatId, message_ids: chunk })
+    if (bulk?.ok) continue
+    for (const id of chunk) {
+      if (budget-- <= 0) break
       await tgApi(env, 'deleteMessage', { chat_id: chatId, message_id: id })
     }
   }
@@ -441,6 +455,12 @@ async function handleCallback(env, cq) {
     if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
     p.mode = 'cat_price'; await setPending(env, chatId, p)
     return tgSend(env, chatId, '💲 Mandá el precio nuevo en CLP (solo número, ej: <code>12990</code>):')
+  }
+  if (data === 'cat:qty') {
+    const p = await getPending(env, chatId)
+    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
+    p.mode = 'cat_qty'; await setPending(env, chatId, p)
+    return tgSend(env, chatId, '🔢 Mandá la cantidad de unidades (solo número, ej: <code>3</code>):')
   }
   if (data === 'cat:title') {
     const p = await getPending(env, chatId)
@@ -993,6 +1013,7 @@ async function runCatalogAnalyze(env, chatId) {
     attrValues,
     photos:       p.photos,
     market,
+    qty:          1,
   }
   await setPending(env, chatId, { mode: 'cat_confirm', draft, cats })
   return sendCatalogPreview(env, chatId, draft)
@@ -1007,7 +1028,7 @@ async function sendCatalogPreview(env, chatId, draft) {
     `💲 <b>${fmtMoney(draft.price, 'CLP')}</b>` +
       (m ? `  <i>(mercado: ${fmtMoney(m.min, 'CLP')}–${fmtMoney(m.max, 'CLP')}, mediana ${fmtMoney(m.median, 'CLP')}, ${m.count} avisos)</i>` : ''),
     `🏷 ${esc(draft.categoryName)} · ${draft.condition === 'new' ? 'Nuevo' : 'Usado'} · 📸 ${draft.photos.length} foto(s)`,
-    `🚚 Envío a cargo del comprador · Stock: 1`,
+    `🚚 Envío a cargo del comprador · Stock: ${draft.qty || 1}`,
   ]
   const attrs = Object.entries(draft.attrValues || {}).filter(([, v]) => v?.toString().trim())
   if (attrs.length)
@@ -1017,7 +1038,8 @@ async function sendCatalogPreview(env, chatId, draft) {
   return tgSend(env, chatId, lines.join('\n'), { reply_markup: { inline_keyboard: [
     [{ text: '✅ Publicar', callback_data: 'cat:pub' }],
     [{ text: '💲 Precio', callback_data: 'cat:price' },
-     { text: '✏️ Título', callback_data: 'cat:title' }],
+     { text: '✏️ Título', callback_data: 'cat:title' },
+     { text: '🔢 Cantidad', callback_data: 'cat:qty' }],
     [{ text: '🏷 Categoría', callback_data: 'cat:cats' },
      { text: `🔄 ${draft.condition === 'new' ? 'Nuevo→Usado' : 'Usado→Nuevo'}`, callback_data: 'cat:cond' }],
     [{ text: '❌ Cancelar', callback_data: 'cat:x' }],
@@ -1086,7 +1108,7 @@ async function runCatalogPublish(env, chatId) {
   await tgSend(env, chatId, [
     '🎉 <b>¡Publicado!</b>',
     `📌 ${esc(d.title)}`,
-    `💲 ${fmtMoney(d.price, 'CLP')} · 🚚 envío a cargo del comprador · stock 1`,
+    `💲 ${fmtMoney(d.price, 'CLP')} · 🚚 envío a cargo del comprador · stock ${d.qty || 1}`,
     `🔗 ${item.permalink || item.id}`,
   ].join('\n'), { reply_markup: MAIN_KB })
 

@@ -8,7 +8,7 @@
  *
  * Reglas fijas del negocio (decisión 2026-07-03):
  *   - shipping SIEMPRE { mode: 'me2', free_shipping: false } (paga el comprador).
- *   - available_quantity SIEMPRE 1 (una unidad por producto).
+ *   - available_quantity: 1 por defecto, editable desde la vista previa del bot.
  */
 
 import { mlFetch } from './ml-fetch.js'
@@ -24,6 +24,18 @@ export function cleanTitle(title, maxLen = 60) {
     .replace(/\s{2,}/g, ' ')
     .trim()
     .slice(0, maxLen)
+}
+
+// ML rechaza la descripción si trae emojis o símbolos decorativos (✓ ▪ ━ ⭐ …):
+// "The description must be in plain text". Se degrada a texto plano puro.
+export function sanitizeDescription(text) {
+  return (text || '')
+    .replace(/[✓✔▪•►◦]/g, '-')
+    .replace(/[━─═—]{2,}/g, '')
+    .replace(/[^\w\sáéíóúüñÁÉÍÓÚÜÑ.,;:()%$/+'"¡!¿?#&@*=-]/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 // ── Llamada a Anthropic (imagen opcional) ─────────────────────
@@ -71,15 +83,14 @@ Para el campo "description" genera una descripción en TEXTO PLANO (SIN HTML) si
 
 ESTRUCTURA OBLIGATORIA:
 1. Primera línea: gancho con marca+modelo+tipo + beneficio principal (con keywords SEO)
-2. BENEFICIOS CLAVE\\n✓ [beneficio 1]\\n✓ [beneficio 2]\\n✓ [beneficio 3]
-3. ESPECIFICACIONES\\n▪ [spec 1]\\n▪ [spec 2]
+2. BENEFICIOS CLAVE\\n- [beneficio 1]\\n- [beneficio 2]\\n- [beneficio 3]
+3. ESPECIFICACIONES\\n- [spec 1]\\n- [spec 2]
 4. Una línea de confianza/garantía
 5. Cierre con llamado a la acción
 
 REGLAS:
-- Solo texto plano + emojis moderados: ✅ ⚡ 📦 🛡️ ⭐
-- Separadores: ━━━━━━━━
-- Viñetas: ✓ ▪
+- SOLO texto plano: letras, números y puntuación básica. ML RECHAZA emojis y símbolos decorativos (✓ ▪ ━ ⭐ etc.) — NO los uses.
+- Viñetas: guion simple (-)
 - 150-400 palabras
 - Keywords principales en las primeras 2 líneas
 - NO tags HTML (< >)
@@ -222,20 +233,43 @@ export async function uploadPicture(token, arrayBuffer) {
 
 // ── Crear la publicación ──────────────────────────────────────
 // draft: { title, price, description, condition, categoryId, attrValues, pictureIds }
+// El tipo "free" no existe en todas las categorías (p.ej. MLC3398 solo ofrece
+// gold_*). Se consulta lo disponible y se elige lo más barato: free → Clásica.
+async function pickListingType(token, categoryId) {
+  try {
+    // El user id viene embebido al final del token: APP_USR-<app>-<...>-<user_id>
+    const userId = token.split('-').pop()
+    if (!/^\d+$/.test(userId)) throw new Error('user id no derivable del token')
+    const r = await mlFetch(`${ML}/users/${userId}/available_listing_types?category_id=${categoryId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const ids = ((await r.json()).available || []).map(t => t.id)
+    for (const pref of ['free', 'gold_special', 'gold_pro']) {
+      if (ids.includes(pref)) return pref
+    }
+    if (ids.length) return ids[0]
+  } catch (e) { log('available_listing_types falló:', e.message) }
+  return 'free'
+}
+
 export async function createListing(token, draft) {
   const attributes = Object.entries(draft.attrValues || {})
     .filter(([, v]) => v?.toString().trim())
     .map(([id, value_name]) => ({ id, value_name: value_name.toString() }))
+
+  const listingType = await pickListingType(token, draft.categoryId)
+  if (listingType !== 'free') log(`listing_type para ${draft.categoryId}: ${listingType} (free no disponible)`)
 
   const payload = {
     title:              (draft.title || '').slice(0, 60),
     category_id:        draft.categoryId,
     price:              draft.price,
     currency_id:        'CLP',
-    available_quantity: 1,
+    available_quantity: Math.max(1, Math.round(Number(draft.qty)) || 1),
     buying_mode:        'buy_it_now',
     condition:          draft.condition || 'used',
-    listing_type_id:    'free',
+    listing_type_id:    listingType,
     ...(draft.pictureIds?.length && { pictures: draft.pictureIds.map(id => ({ id })) }),
     ...(attributes.length && { attributes }),
     // Envío SIEMPRE a cargo del comprador.
@@ -258,13 +292,15 @@ export async function createListing(token, draft) {
   }
 
   // Descripción va en endpoint separado; si falla no bloquea (el ítem ya existe).
-  if (draft.description?.trim()) {
+  const plainDesc = sanitizeDescription(draft.description)
+  if (plainDesc) {
     try {
-      await mlFetch(`${ML}/items/${data.id}/description`, {
+      const rd = await mlFetch(`${ML}/items/${data.id}/description`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plain_text: draft.description.trim() }),
+        body: JSON.stringify({ plain_text: plainDesc }),
       })
+      if (!rd.ok) log('descripción rechazada:', JSON.stringify(await rd.json().catch(() => ({}))).slice(0, 300))
     } catch (e) { log('descripción falló:', e.message) }
   }
 
