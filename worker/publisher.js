@@ -3,7 +3,7 @@
  *
  * Porta el pipeline del SPA "ML AutoPublisher" (src/agents/orchestrator.js +
  * App.jsx publish) al Worker:
- *   foto(s) → análisis IA (visión/SEO/precio/categoría en paralelo) →
+ *   foto(s) → análisis IA (UN agente detallado con hasta 3 fotos) →
  *   domain_discovery → atributos requeridos por IA → subir fotos → crear ítem.
  *
  * Reglas fijas del negocio (decisión 2026-07-03):
@@ -38,11 +38,12 @@ export function sanitizeDescription(text) {
     .trim()
 }
 
-// ── Llamada a Anthropic (imagen opcional) ─────────────────────
+// ── Llamada a Anthropic (imágenes opcionales: string o array) ──
 async function ask(agentName, system, imageB64, apiKey) {
-  const content = imageB64
+  const images = imageB64 ? (Array.isArray(imageB64) ? imageB64 : [imageB64]) : []
+  const content = images.length
     ? [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageB64 } },
+        ...images.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } })),
         { type: 'text', text: 'Analiza y responde el JSON solicitado.' },
       ]
     : 'Responde el JSON solicitado según las instrucciones del sistema.'
@@ -56,7 +57,7 @@ async function ask(agentName, system, imageB64, apiKey) {
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 2048,
       system,
       messages: [{ role: 'user', content }],
     }),
@@ -71,86 +72,80 @@ async function ask(agentName, system, imageB64, apiKey) {
   return JSON.parse(match[0])
 }
 
-// ── Análisis del producto (4 agentes en paralelo) ─────────────
-export async function analyzeProduct(imageB64, apiKey) {
+// ── Análisis del producto (UN agente detallado, hasta 3 fotos) ─
+// Antes eran 4 llamadas en paralelo que subían la misma imagen 4 veces; una
+// sola llamada con todas las fotos es más rápida, más barata y más coherente
+// (título/precio/categoría salen del mismo entendimiento del producto).
+export async function analyzeProduct(imagesB64, apiKey) {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY no configurada en el Worker.')
 
-  const [vision, seo, price, category] = await Promise.all([
-    ask('Vision',
-      `Eres experto en productos y copywriting para MercadoLibre Chile. Mira la imagen. Identifica: tipo exacto, marca, modelo, estado físico, 3-4 características.
+  const a = await ask('Analista',
+    `Eres un catalogador experto de MercadoLibre Chile. Vas a recibir una o más fotos DEL MISMO producto (distintos ángulos, empaque, etiquetas). Examínalas TODAS con lupa antes de responder.
 
-Para el campo "description" genera una descripción en TEXTO PLANO (SIN HTML) siguiendo esta estructura:
+IDENTIFICACIÓN (lo más importante):
+- LEE los logos, textos y etiquetas visibles LETRA POR LETRA. La marca es la que está IMPRESA, no la más famosa del rubro: Matchbox NO es Hot Wheels, Majorette NO es Matchbox, Casio NO es Citizen, etc. Si el logo se lee, transcríbelo EXACTO.
+- Si ninguna foto muestra la marca de forma legible, brand = null. NUNCA adivines una marca "parecida".
+- model: código/nombre de modelo impreso (caja, base, etiqueta) si existe.
+- Extrae todo dato técnico visible: escala, material, color, talla, capacidad, año, serie, número de pieza, contenido del empaque.
+- condition: "new" solo si se ve sellado/empaque original intacto; si hay señales de uso, "used".
 
-ESTRUCTURA OBLIGATORIA:
-1. Primera línea: gancho con marca+modelo+tipo + beneficio principal (con keywords SEO)
-2. BENEFICIOS CLAVE\\n- [beneficio 1]\\n- [beneficio 2]\\n- [beneficio 3]
-3. ESPECIFICACIONES\\n- [spec 1]\\n- [spec 2]
-4. Una línea de confianza/garantía
-5. Cierre con llamado a la acción
+TÍTULO (campo "title"), reglas duras de ML:
+- Formato: Producto + Marca + Modelo + spec clave. Máx 60 caracteres.
+- Solo palabras y números (sin símbolos ni puntuación).
+- Sin: envío gratis, cuotas, descuentos, FULL, stock, nuevo, usado.
 
-REGLAS:
-- SOLO texto plano: letras, números y puntuación básica. ML RECHAZA emojis y símbolos decorativos (✓ ▪ ━ ⭐ etc.) — NO los uses.
-- Viñetas: guion simple (-)
-- 150-400 palabras
-- Keywords principales en las primeras 2 líneas
-- NO tags HTML (< >)
-- NO mencionar envío gratis ni garantía a menos que el producto lo incluya
-- NO keyword stuffing
+PRECIO (campo "price"): precio justo de venta en CLP para el mercado chileno según marca, tipo, estado y valor de colección si aplica. Sé realista con productos usados.
+
+CATEGORÍA (campo "searches"): 3 términos de búsqueda MUY específicos para encontrar la categoría exacta en MercadoLibre (ej: "auto colección die-cast 1:64", no "juguete").
+
+DESCRIPCIÓN (campo "description"), TEXTO PLANO — ML RECHAZA emojis y símbolos decorativos (✓ ▪ ━ ⭐), usa solo letras, números, puntuación básica y viñetas con guion (-):
+1. Gancho: marca + modelo + tipo + beneficio principal (keywords SEO en las 2 primeras líneas).
+2. BENEFICIOS CLAVE: 3-4 viñetas.
+3. ESPECIFICACIONES: TODAS las specs visibles en las fotos (marca, modelo, escala, material, color, dimensiones, serie, contenido).
+4. Una línea de confianza y un cierre con llamado a la acción.
+- 150-400 palabras. Sin HTML. No mencionar envío gratis ni garantías que el producto no incluya. No keyword stuffing.
 
 Responde SOLO JSON:
-{"product":"nombre específico","brand":"marca o null","model":"modelo o null","condition":"new o used","features":["f1","f2","f3"],"description":"descripción persuasiva en texto plano según la estructura"}`,
-      imageB64, apiKey),
-    ask('SEO',
-      `Eres SEO expert MercadoLibre Chile. Mira la imagen y genera el título.
+{"product":"tipo específico","brand":"marca EXACTA impresa o null","model":"modelo o null","condition":"new|used","features":["5-6 características concretas"],"specs":{"ESCALA":"1:64","COLOR":"...","MATERIAL":"..."},"title":"título ML","price":15000,"searches":["t1","t2","t3"],"description":"descripción detallada"}`,
+    imagesB64, apiKey)
 
-REGLAS DURAS DE TÍTULO MERCADOLIBRE:
-- Formato: PRODUCTO + MARCA + MODELO + especificaciones clave
-- Sin símbolos ni puntuación (solo palabras y números)
-- Sin mencionar: envío gratis, cuotas, descuentos, FULL, stock, nuevo, usado
-- Sin errores ortográficos, sin repeticiones
-- Máximo 60 caracteres
-
-Responde SOLO JSON: {"title":"título"}`,
-      imageB64, apiKey),
-    ask('Precio',
-      'Eres experto en precios Chile. Mira la imagen. Estima precio justo en CLP para MercadoLibre según marca, tipo, estado.\nResponde SOLO JSON: {"price":15000}',
-      imageB64, apiKey),
-    ask('Categoria',
-      'Eres experto en taxonomía MercadoLibre Chile. Mira la imagen. 3 términos de búsqueda ESPECÍFICOS para la categoría.\nResponde SOLO JSON: {"searches":["término1","término2","término3"]}',
-      imageB64, apiKey),
-  ])
-
-  const rawDesc = vision.description ||
-    [vision.product, vision.brand, vision.model, vision.condition].filter(Boolean).join(' · ') || ''
+  const rawDesc = a.description ||
+    [a.product, a.brand, a.model, a.condition].filter(Boolean).join(' · ') || ''
 
   return {
-    product:          vision.product   || 'Producto',
-    brand:            vision.brand     || null,
-    model:            vision.model     || null,
-    condition:        vision.condition || 'used',
-    features:         vision.features  || [],
+    product:          a.product   || 'Producto',
+    brand:            a.brand     || null,
+    model:            a.model     || null,
+    condition:        a.condition || 'used',
+    features:         a.features  || [],
+    specs:            a.specs     || {},
     description:      rawDesc.replace(/<[^>]*>/g, '').trim(),
-    title:            cleanTitle(seo.title || vision.product || 'Producto'),
-    price:            Number(price.price) || 10000,
-    categorySearches: category.searches || [],
+    title:            cleanTitle(a.title || a.product || 'Producto'),
+    price:            Number(a.price) || 10000,
+    categorySearches: a.searches || [],
   }
 }
 
 // ── Categorías reales vía domain_discovery ────────────────────
 export async function discoverCategories(searches) {
-  const found = [], seen = new Set()
-  for (const q of (searches || []).slice(0, 3)) {
+  // Las 3 búsquedas en paralelo (antes secuenciales); el orden de preferencia
+  // se conserva al recorrer los resultados en el orden original.
+  const results = await Promise.all((searches || []).slice(0, 3).map(async q => {
     try {
       const r = await mlFetch(`${ML}/sites/MLC/domain_discovery/search?q=${encodeURIComponent(q)}`)
       const data = await r.json()
-      const items = Array.isArray(data) ? data : [data]
-      for (const c of items.slice(0, 2)) {
-        if (c?.category_id && !seen.has(c.category_id)) {
-          seen.add(c.category_id)
-          found.push({ id: c.category_id, name: c.category_name || q })
-        }
+      return { q, items: Array.isArray(data) ? data : [data] }
+    } catch (e) { log('domain_discovery falló:', e.message); return { q, items: [] } }
+  }))
+
+  const found = [], seen = new Set()
+  for (const { q, items } of results) {
+    for (const c of items.slice(0, 2)) {
+      if (c?.category_id && !seen.has(c.category_id)) {
+        seen.add(c.category_id)
+        found.push({ id: c.category_id, name: c.category_name || q })
       }
-    } catch (e) { log('domain_discovery falló:', e.message) }
+    }
   }
   return found.slice(0, 5)
 }
@@ -169,17 +164,20 @@ export async function fillAttributesWithAI(requiredAttrs, analysis, apiKey, extr
     id: a.id,
     name: a.name,
     type: a.value_type,
-    options: (a.values || []).slice(0, 20).map(v => v.name),
+    options: (a.values || []).slice(0, 60).map(v => v.name),
   }))
+  let out = {}
   try {
-    return await ask('Atributos',
+    out = await ask('Atributos',
       `Eres experto en MercadoLibre Chile. Analiza el producto y asigna los atributos requeridos.
 
-Datos del producto:
+Datos del producto (fuente de verdad, salen de las fotos reales):
 - Tipo: "${analysis.product || ''}"
 - Marca: "${analysis.brand || ''}"
 - Modelo: "${analysis.model || ''}"
 - Condición: "${analysis.condition || ''}"
+- Características: ${JSON.stringify(analysis.features || [])}
+- Specs detectadas: ${JSON.stringify(analysis.specs || {})}
 - Título ML: "${extra.title || analysis.title || ''}"
 - Descripción: "${extra.description || analysis.description || ''}"
 - Categoría ML: "${extra.categoryName || ''}"
@@ -187,15 +185,25 @@ Datos del producto:
 Atributos a completar: ${JSON.stringify(attrList)}
 
 Reglas:
-1. Si el atributo tiene opciones (options), elige EXACTAMENTE una de esa lista (mismo texto, sin variaciones).
-2. Si no tiene opciones, usa texto libre preciso y conciso.
-3. No inventes valores; si no puedes determinarlo con certeza, elige la opción más genérica disponible.
+1. Si el atributo tiene opciones (options) y alguna coincide con el dato real, usa EXACTAMENTE ese texto de la lista.
+2. La MARCA es SAGRADA: usa la marca dada arriba TAL CUAL. Si no aparece en las opciones, escríbela igual como texto libre. PROHIBIDO sustituirla por otra marca "parecida" o más conocida.
+3. Si no tiene opciones, usa texto libre preciso y conciso basado en los datos/specs.
+4. No inventes valores: si un dato no se puede determinar, omite ese atributo del JSON (no lo rellenes por rellenar).
 
 Responde SOLO JSON: {"ID_ATTR": "valor_elegido", "OTRO_ID": "valor"}`,
       null, apiKey) || {}
   } catch {
-    return {}
+    out = {}
   }
+
+  // Cinturón de seguridad: la marca detectada en las fotos manda SIEMPRE,
+  // aunque la IA de atributos haya elegido otra cosa (caso Matchbox→Hot Wheels).
+  if (analysis.brand?.trim()) {
+    for (const a of requiredAttrs) {
+      if (a.id === 'BRAND' || /marca/i.test(a.name || '')) out[a.id] = analysis.brand.trim()
+    }
+  }
+  return out
 }
 
 // ── Precios de mercado en la categoría (referencia) ───────────

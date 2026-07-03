@@ -972,16 +972,16 @@ async function runCatalogAnalyze(env, chatId) {
   await tgApi(env, 'sendChatAction', { chat_id: chatId, action: 'typing' })
   await tgSend(env, chatId, '🤖 Analizando el producto con IA…')
 
-  let b64
-  try {
-    b64 = await tgGetFileBytes(env, p.photos[0])
-  } catch (e) {
-    return tgSend(env, chatId, `❌ No pude descargar la foto: ${e.message}`)
-  }
+  // Hasta 3 fotos al análisis (más contexto = marca/modelo/specs más fiables),
+  // descargadas en paralelo. Si alguna falla se sigue con las que haya.
+  const buffers = await Promise.all(p.photos.slice(0, 3).map(id =>
+    tgGetFileBytes(env, id).catch(e => { logErr('descarga foto análisis:', e.message); return null })))
+  const imagesB64 = buffers.filter(Boolean)
+  if (!imagesB64.length) return tgSend(env, chatId, '❌ No pude descargar las fotos. Probá de nuevo.')
 
   let analysis
   try {
-    analysis = await analyzeProduct(b64, env.ANTHROPIC_API_KEY)
+    analysis = await analyzeProduct(imagesB64, env.ANTHROPIC_API_KEY)
   } catch (e) {
     return tgSend(env, chatId, `❌ Error de IA: ${esc(e.message)}`)
   }
@@ -994,20 +994,27 @@ async function runCatalogAnalyze(env, chatId) {
       `⚠️ No encontré una categoría de ML para "${esc(analysis.product)}". Probá con otra foto más clara.`)
   }
 
-  let attrValues = {}
-  try {
-    const required = await getRequiredAttrs(best.id)
-    attrValues = await fillAttributesWithAI(required, analysis, env.ANTHROPIC_API_KEY,
-      { title: analysis.title, description: analysis.description, categoryName: best.name })
-  } catch (e) { logErr('attrs:', e.message) }
-
-  const market = await getMarketPrices(best.id, analysis.title)
+  // Atributos (ML + IA) y precios de mercado en paralelo: no dependen entre sí.
+  const [attrValues, market] = await Promise.all([
+    getRequiredAttrs(best.id)
+      .then(required => fillAttributesWithAI(required, analysis, env.ANTHROPIC_API_KEY,
+        { title: analysis.title, description: analysis.description, categoryName: best.name }))
+      .catch(e => { logErr('attrs:', e.message); return {} }),
+    getMarketPrices(best.id, analysis.title),
+  ])
 
   const draft = {
     title:        analysis.title,
     price:        analysis.price,
     description:  analysis.description,
     condition:    analysis.condition,
+    // Identificación de las fotos: la reutiliza fillAttributesWithAI al
+    // recategorizar (el draft hace de "analysis") — la marca no se pierde.
+    product:      analysis.product,
+    brand:        analysis.brand,
+    model:        analysis.model,
+    features:     analysis.features,
+    specs:        analysis.specs,
     categoryId:   best.id,
     categoryName: best.name,
     attrValues,
@@ -1077,13 +1084,15 @@ async function runCatalogPublish(env, chatId) {
     return tgSend(env, chatId, `❌ Sin conexión con ML: ${esc(e.message)}`)
   }
 
-  const pictureIds = []
-  for (const fileId of d.photos) {
+  // Descarga de Telegram + subida a ML de todas las fotos en paralelo,
+  // conservando el orden (la primera foto es la portada del aviso).
+  const uploaded = await Promise.all(d.photos.map(async fileId => {
     try {
       const buf = await tgGetFileBuffer(env, fileId)
-      pictureIds.push(await uploadPicture(token, buf))
-    } catch (e) { logErr('subida foto:', e.message) }
-  }
+      return await uploadPicture(token, buf)
+    } catch (e) { logErr('subida foto:', e.message); return null }
+  }))
+  const pictureIds = uploaded.filter(Boolean)
   if (d.photos.length > 0 && pictureIds.length === 0) {
     return tgSend(env, chatId,
       '❌ No se pudo subir ninguna foto a ML; cancelé la publicación para no crear un aviso sin imágenes. Probá de nuevo con <b>Publicar</b>.',
