@@ -1,33 +1,37 @@
 {
-  "phase": "mensajeria-arreglada + bot-python-creado-y-verificado",
-  "status": "CERRADO. DONE-deployed-pushed. Bot Python arranca OK (build_app PTB 21.6). Esperando verificacion real del usuario con tokens.",
-  "last_session": "2026-06-19T00:00:00Z",
-  "last_worker_version": "b1f2236b-5b3c-4742-8e34-e0c77f8a71fa",
-  "last_commit": "aff52ae (main, pusheado)",
-  "next_step": "Sin trabajo de codigo pendiente. Verificar en la proxima venta real que el mensaje al comprador sale via Action Guide (wrangler tail). Si el usuario quiere: correr bot-python (cp .env.example .env, tokens, python main.py; recomendado ML_USE_PROXY=true).",
+  "phase": "bot re-enfocado: catalogado/publicación multi-operador (cron post-venta apagado)",
+  "status": "Sesión 7: bot vuelve al servicio como CATALOGADOR (commit ce3a59e, Version b67b83e1): fotos → IA (haiku) → vista previa editable → publicar en ML con envío pagado por comprador y stock 1. Multi-operador: admin + chats aprobados (KV chats:allowed) publican a la misma cuenta ML. Webhook activo; cron sigue OFF. Inventario: 129/149 envío pagado, stock 1 en 143.",
+  "last_session": "2026-07-03T23:00:00Z",
+  "last_worker_version": "b67b83e1-cd1d-42ed-a397-169af4eecbb4",
+  "last_commit": "ce3a59e (main, pusheado)",
+  "next_step": "Retomar desde progress/HANDOFF.txt: (1) rechazar solicitud del chat 999999999; (2) prueba real de catalogado foto→Analizar→Publicar con wrangler tail abierto; (3) alta de la esposa (/start → aprobar) y prueba en paralelo.",
   "open_tasks": [
-    "USUARIO: verificar en venta real que el mensaje al comprador sale (Action Guide)",
-    "OPCIONAL: correr/desplegar bot-python (README tiene setup en 5 pasos + systemd)"
+    "Probar catalogado real (foto → publicar) desde el chat del admin",
+    "Alta de la esposa: /start → aprobar → prueba desde su celular",
+    "Rechazar solicitud de acceso de prueba (chat 999999999)",
+    "Decidir destino del SPA (queda como legacy en el repo)",
+    "Opcional: 20 publicaciones ≥$25.990 siguen con envío gratis obligatorio"
   ],
-  "blockers": [],
+  "blockers": [
+    "ML Chile obliga envío gratis en publicaciones ≥ ~$19.990: la API ignora free_shipping=false (200 silencioso) o devuelve field_not_updatable. Afecta a 40 publicaciones."
+  ],
+  "key_findings": [
+    "Items con variaciones: el precio NO se cambia con PUT price (item.price.not_modifiable); hay que mandar variations:[{id, price}].",
+    "Las notificaciones orders_v2 → /ml/notifications FUNCIONAN: el KV se repobló solo con 8 órdenes tras la limpieza del 06-19 (la más nueva del 06-29).",
+    "ML puede responder 200 a un PUT de items e IGNORAR el cambio de shipping.free_shipping: verificar siempre el valor, no el status code.",
+    "El bloqueo blocked_by_conversation_initiated_by_seller_limited seguía activo al 06-29 (ig_cta_warned=true en la última orden).",
+    "El bot Python NO debe usar el mismo token del Worker (polling=deleteWebhook mata el webhook)."
+  ],
   "known_limits": [
-    "ML cap OTHER=1 por pack: solo 1 mensaje de inicio por venta hasta que el comprador responda (politica de ML, no bug; el scheduler reintenta al abrirse la conversacion)"
+    "Umbral de envío gratis obligatorio MLC ≈ $19.990 (no es 100% por precio: algunos ítems de $45.000 sí aceptaron el cambio).",
+    "Órdenes al KV solo por notificación orders_v2 (el Worker sigue recibiéndolas aunque el bot esté apagado)."
   ],
-  "done_this_session": [
-    "Diagnostico causa raiz en vivo: ML bloquea inicio de conversacion de vendedor NEWBIE (blocked_by_conversation_initiated_by_seller_limited), NO era el token",
-    "worker/messaging.js: sendBuyerMessage usa Action Guide API (GET options + POST option OTHER FREE_TEXT 350; clasico si conv abierta o adjuntos; need_buyer_reply si cupo agotado)",
-    "worker/scheduler.js FIX A: flags de idempotencia solo si el envio salio (shipped_msg_sent/ig_cta_sent/review_msg_sent) -> reintenta, no pierde mensajes",
-    "worker/scheduler.js FIX B: avisa por Telegram el motivo via msgStatusLine, una vez por estado (sin spam); CTA Instagram acortado a 271 sin HTML",
-    "Desplegado Worker Version b1f2236b; verificado por 2 agentes (vivo + estatico)",
-    "Creado bot-python/ standalone (python-telegram-bot v21, 9 archivos, compila OK)",
-    "Commit aff52ae pusheado a main"
-  ],
-  "bot": "t.me/Pulicadorlibre_bot",
+  "bot": "t.me/Pulicadorlibre_bot (webhook BORRADO — fuera de servicio)",
   "telegram_chat_id": "1036420688",
   "seller_id": "283388639",
   "worker_url": "https://mlpu-proxy.aronricocl.workers.dev",
   "kv_ml_tokens": "1f6324c3659d4388bec284825c2864be",
   "kv_ml_orders": "d72bf35159b54eabadffafc521c1562b",
-  "cron": "*/10 * * * *",
+  "cron": "desactivado (era */10 * * * *)",
   "repo": "https://github.com/25225840Rico/MLPU"
 }
