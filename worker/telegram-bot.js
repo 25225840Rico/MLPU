@@ -20,7 +20,7 @@ import { sendMessageToBuyer, getConversation, TEMPLATES, TEMPLATE_LABELS } from 
 import { exchangeAuthCode, buildAuthUrl, getValidAccessToken } from './index.js'
 import {
   analyzeProduct, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
-  getMarketPrices, uploadPicture, createListing, cleanTitle,
+  getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
 
 const TG_API = 'https://api.telegram.org'
@@ -178,8 +178,10 @@ async function handleTextCommand(env, msg) {
 
   // Catalogado: edición de precio / título del borrador en curso.
   if (pend0?.mode === 'cat_price' && text && !text.startsWith('/') && !isButtonLabel(text)) {
-    const price = Math.round(Number(text.replace(/[.$\s]/g, '').replace(',', '.')))
-    if (!price || price < 1) return tgSend(env, chatId, '❌ Precio inválido. Mandá solo el número, ej: <code>12990</code>')
+    const raw = Math.round(Number(text.replace(/[.$\s]/g, '').replace(',', '.')))
+    if (!raw || raw < 1) return tgSend(env, chatId, '❌ Precio inválido. Mandá solo el número, ej: <code>12990</code>')
+    const price = roundTo990(raw)
+    if (price !== raw) await tgSend(env, chatId, `ℹ️ Precio ajustado a terminación 990: <b>${fmtMoney(price, 'CLP')}</b>`)
     pend0.draft.price = price
     pend0.mode = 'cat_confirm'
     await setPending(env, chatId, pend0)
@@ -461,6 +463,13 @@ async function handleCallback(env, cq) {
     if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
     p.mode = 'cat_qty'; await setPending(env, chatId, p)
     return tgSend(env, chatId, '🔢 Mandá la cantidad de unidades (solo número, ej: <code>3</code>):')
+  }
+  if (data === 'cat:ship') {
+    const p = await getPending(env, chatId)
+    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
+    p.draft.freeShipping = !p.draft.freeShipping
+    await setPending(env, chatId, p)
+    return sendCatalogPreview(env, chatId, p.draft)
   }
   if (data === 'cat:title') {
     const p = await getPending(env, chatId)
@@ -1005,7 +1014,10 @@ async function runCatalogAnalyze(env, chatId) {
 
   const draft = {
     title:        analysis.title,
-    price:        analysis.price,
+    // Valor inicial = precio de mercado (mediana) si existe; si no, el estimado
+    // por la IA. Siempre con terminación 990.
+    price:        market?.median ? roundTo990(market.median) : analysis.price,
+    freeShipping: false, // envío a cargo del comprador por defecto
     description:  analysis.description,
     condition:    analysis.condition,
     // Identificación de las fotos: la reutiliza fillAttributesWithAI al
@@ -1028,14 +1040,29 @@ async function runCatalogAnalyze(env, chatId) {
 
 async function sendCatalogPreview(env, chatId, draft) {
   const m = draft.market
+
+  // Ganancia estimada: comisión real de ML + costo de envío si lo paga el
+  // vendedor. Si algo falla, la preview sale igual sin esa línea.
+  let profitLine = null
+  try {
+    const token = await getValidAccessToken(env)
+    const est = await estimateProfit(token, draft)
+    if (est.fee != null) {
+      const parts = [`comisión ${fmtMoney(est.fee, 'CLP')}`]
+      if (draft.freeShipping) parts.push(`envío ~${fmtMoney(est.ship || 0, 'CLP')}`)
+      profitLine = `💰 <b>Ganancia estimada: ${fmtMoney(est.net, 'CLP')}</b> <i>(${parts.join(' − ')}, ${est.listingType === 'free' ? 'publicación gratuita' : 'Clásica/paga'})</i>`
+    }
+  } catch (e) { logErr('estimateProfit:', e.message) }
+
   const lines = [
     '📋 <b>Vista previa de la publicación</b>',
     '',
     `📌 <b>${esc(draft.title)}</b>`,
     `💲 <b>${fmtMoney(draft.price, 'CLP')}</b>` +
       (m ? `  <i>(mercado: ${fmtMoney(m.min, 'CLP')}–${fmtMoney(m.max, 'CLP')}, mediana ${fmtMoney(m.median, 'CLP')}, ${m.count} avisos)</i>` : ''),
+    ...(profitLine ? [profitLine] : []),
     `🏷 ${esc(draft.categoryName)} · ${draft.condition === 'new' ? 'Nuevo' : 'Usado'} · 📸 ${draft.photos.length} foto(s)`,
-    `🚚 Envío a cargo del comprador · Stock: ${draft.qty || 1}`,
+    `🚚 Envío: ${draft.freeShipping ? 'GRATIS (lo paga el vendedor)' : 'a cargo del comprador'} · Stock: ${draft.qty || 1}`,
   ]
   const attrs = Object.entries(draft.attrValues || {}).filter(([, v]) => v?.toString().trim())
   if (attrs.length)
@@ -1049,6 +1076,7 @@ async function sendCatalogPreview(env, chatId, draft) {
      { text: '🔢 Cantidad', callback_data: 'cat:qty' }],
     [{ text: '🏷 Categoría', callback_data: 'cat:cats' },
      { text: `🔄 ${draft.condition === 'new' ? 'Nuevo→Usado' : 'Usado→Nuevo'}`, callback_data: 'cat:cond' }],
+    [{ text: `🚚 ${draft.freeShipping ? 'Cambiar a envío por comprador' : 'Cambiar a envío gratis (vendedor)'}`, callback_data: 'cat:ship' }],
     [{ text: '❌ Cancelar', callback_data: 'cat:x' }],
   ] } })
 }
@@ -1117,7 +1145,7 @@ async function runCatalogPublish(env, chatId) {
   await tgSend(env, chatId, [
     '🎉 <b>¡Publicado!</b>',
     `📌 ${esc(d.title)}`,
-    `💲 ${fmtMoney(d.price, 'CLP')} · 🚚 envío a cargo del comprador · stock ${d.qty || 1}`,
+    `💲 ${fmtMoney(d.price, 'CLP')} · 🚚 ${d.freeShipping ? 'envío gratis (vendedor)' : 'envío a cargo del comprador'} · stock ${d.qty || 1}`,
     `🔗 ${item.permalink || item.id}`,
   ].join('\n'), { reply_markup: MAIN_KB })
 

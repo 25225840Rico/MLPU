@@ -26,6 +26,14 @@ export function cleanTitle(title, maxLen = 60) {
     .slice(0, maxLen)
 }
 
+// Regla de negocio: todos los precios terminan en 990 (psicológico chileno).
+// 12.000 → 11.990 · 12.600 → 12.990 · mínimo 990.
+export function roundTo990(p) {
+  p = Math.round(Number(p) || 0)
+  if (p <= 990) return 990
+  return Math.round(p / 1000) * 1000 - 10
+}
+
 // ML rechaza la descripción si trae emojis o símbolos decorativos (✓ ▪ ━ ⭐ …):
 // "The description must be in plain text". Se degrada a texto plano puro.
 export function sanitizeDescription(text) {
@@ -121,7 +129,7 @@ Responde SOLO JSON:
     specs:            a.specs     || {},
     description:      rawDesc.replace(/<[^>]*>/g, '').trim(),
     title:            cleanTitle(a.title || a.product || 'Producto'),
-    price:            Number(a.price) || 10000,
+    price:            roundTo990(Number(a.price) || 10000),
     categorySearches: a.searches || [],
   }
 }
@@ -261,6 +269,37 @@ async function pickListingType(token, categoryId) {
   return 'free'
 }
 
+// ── Estimación de comisión, envío y ganancia ──────────────────
+// fee: comisión de venta real (listing_prices). ship: lo que pagaría el
+// vendedor por envío gratis, estimado con un paquete genérico de 10x10x10 cm /
+// 500 g (ML exige dimensiones y el ítem aún no existe). net = precio − ambos.
+export async function estimateProfit(token, draft) {
+  const price = Number(draft.price) || 0
+  const listingType = await pickListingType(token, draft.categoryId)
+
+  let fee = null
+  try {
+    const r = await mlFetch(
+      `${ML}/sites/MLC/listing_prices?price=${price}&listing_type_id=${listingType}&category_id=${draft.categoryId}`,
+      { headers: { Authorization: `Bearer ${token}` } })
+    if (r.ok) fee = (await r.json()).sale_fee_amount ?? null
+  } catch (e) { log('listing_prices falló:', e.message) }
+
+  let ship = null
+  if (draft.freeShipping) {
+    try {
+      const userId = token.split('-').pop()
+      const r = await mlFetch(
+        `${ML}/users/${userId}/shipping_options/free?item_price=${price}&listing_type_id=${listingType}` +
+        `&mode=me2&condition=${draft.condition || 'used'}&verbose=true&category_id=${draft.categoryId}&dimensions=10x10x10,500`,
+        { headers: { Authorization: `Bearer ${token}` } })
+      if (r.ok) ship = (await r.json()).coverage?.all_country?.list_cost ?? null
+    } catch (e) { log('shipping_options falló:', e.message) }
+  }
+
+  return { listingType, fee, ship, net: price - (fee || 0) - (ship || 0) }
+}
+
 export async function createListing(token, draft) {
   const attributes = Object.entries(draft.attrValues || {})
     .filter(([, v]) => v?.toString().trim())
@@ -280,12 +319,10 @@ export async function createListing(token, draft) {
     listing_type_id:    listingType,
     ...(draft.pictureIds?.length && { pictures: draft.pictureIds.map(id => ({ id })) }),
     ...(attributes.length && { attributes }),
-    // Envío SIEMPRE a cargo del comprador.
-    shipping: { mode: 'me2', free_shipping: false, local_pick_up: false },
-    sale_terms: [
-      { id: 'WARRANTY_TYPE', value_name: 'Garantía del vendedor' },
-      { id: 'WARRANTY_TIME', value_name: '30 días' },
-    ],
+    // Envío: a cargo del comprador por defecto; el operador puede alternar a
+    // "gratis" (lo paga el vendedor) desde la vista previa (draft.freeShipping).
+    shipping: { mode: 'me2', free_shipping: !!draft.freeShipping, local_pick_up: false },
+    // Sin sale_terms de garantía (decisión 2026-07-03: se quitó la de 30 días).
   }
 
   const r = await mlFetch(`${ML}/items`, {
