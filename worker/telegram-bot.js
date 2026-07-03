@@ -17,7 +17,11 @@ import {
   getOrderDetail, todayRange, monthRange, attachReceiverNames, firstName,
 } from './ml-history.js'
 import { sendMessageToBuyer, getConversation, TEMPLATES, TEMPLATE_LABELS } from './ml-messaging.js'
-import { exchangeAuthCode, buildAuthUrl } from './index.js'
+import { exchangeAuthCode, buildAuthUrl, getValidAccessToken } from './index.js'
+import {
+  analyzeProduct, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
+  getMarketPrices, uploadPicture, createListing, cleanTitle,
+} from './publisher.js'
 
 const TG_API = 'https://api.telegram.org'
 const log    = (...a) => console.log('[ML-BOT]', ...a)
@@ -53,14 +57,15 @@ export const tgSend = (env, chatId, text, extra = {}) =>
 // Botonera persistente (reply keyboard) con las acciones principales.
 const MAIN_KB = {
   keyboard: [
-    [{ text: '🧾 Órdenes' }, { text: '📭 Pendientes' }],
-    [{ text: '📋 Historial' }, { text: '💬 Mensajes' }],
-    [{ text: 'ℹ️ Ayuda' }, { text: '🧹 Limpiar' }],
+    [{ text: '📸 Catalogar' }, { text: '📦 Despacho' }],
+    [{ text: '🧾 Órdenes' }, { text: '📋 Historial' }],
+    [{ text: '💬 Mensajes' }, { text: 'ℹ️ Ayuda' }],
+    [{ text: '🧹 Limpiar' }],
   ],
   resize_keyboard: true,
 }
 const isButtonLabel = (t) =>
-  ['📋 Historial', '💬 Mensajes', '🧾 Órdenes', '📭 Pendientes', 'ℹ️ Ayuda', '🧹 Limpiar'].includes(t)
+  ['📸 Catalogar', '📦 Despacho', '📋 Historial', '💬 Mensajes', '🧾 Órdenes', '📭 Pendientes', 'ℹ️ Ayuda', '🧹 Limpiar'].includes(t)
 
 // ── Webhook receiver ─────────────────────────────────────────
 export async function handleTelegramWebhook(request, env, ctx) {
@@ -77,6 +82,10 @@ export async function handleTelegramWebhook(request, env, ctx) {
   const work = (async () => {
     try {
       const msg = update.message || update.edited_message
+      const chatId = update.callback_query?.message?.chat?.id ?? msg?.chat?.id
+      if (chatId != null && !(await isAllowed(env, chatId))) {
+        return requestAccess(env, chatId, msg?.from || update.callback_query?.from)
+      }
       if (update.callback_query)   await handleCallback(env, update.callback_query)
       else if (msg?.photo?.length) await handlePhoto(env, msg)
       else if (msg?.text)          await handleTextCommand(env, msg)
@@ -92,6 +101,45 @@ export async function handleTelegramWebhook(request, env, ctx) {
   await work
 
   return new Response('ok')
+}
+
+// ── Control de acceso: admin (TELEGRAM_CHAT_ID) + operadores aprobados ──
+// Los operadores (p.ej. la esposa) publican en LA MISMA cuenta de ML del admin.
+const ALLOWED_KEY = 'chats:allowed'
+async function getAllowedChats(env) {
+  try { return JSON.parse(await env.ML_ORDERS.get(ALLOWED_KEY)) || [] } catch { return [] }
+}
+async function isAllowed(env, chatId) {
+  if (String(chatId) === String(env.TELEGRAM_CHAT_ID)) return true
+  return (await getAllowedChats(env)).includes(String(chatId))
+}
+async function requestAccess(env, chatId, from) {
+  const who = [from?.first_name, from?.last_name].filter(Boolean).join(' ') ||
+              from?.username || String(chatId)
+  await tgSend(env, chatId, '🔒 Este bot es privado. Le avisé al administrador; si te aprueba, podrás usarlo.')
+  await tgSend(env, env.TELEGRAM_CHAT_ID,
+    `🔑 <b>${esc(who)}</b> (chat <code>${chatId}</code>) quiere usar el bot.`,
+    { reply_markup: { inline_keyboard: [[
+      { text: '✅ Aprobar', callback_data: `acc:ok:${chatId}` },
+      { text: '❌ Rechazar', callback_data: `acc:no:${chatId}` },
+    ]] } })
+}
+async function approveChat(env, adminChat, targetId, ok) {
+  if (String(adminChat) !== String(env.TELEGRAM_CHAT_ID))
+    return tgSend(env, adminChat, 'Solo el administrador puede aprobar accesos.')
+  if (ok) {
+    const list = await getAllowedChats(env)
+    if (!list.includes(String(targetId))) list.push(String(targetId))
+    await env.ML_ORDERS.put(ALLOWED_KEY, JSON.stringify(list))
+    await tgSend(env, targetId, '✅ Acceso aprobado. Mandá fotos de un producto para catalogarlo y publicarlo. 📸')
+    return tgSend(env, adminChat, `✅ Chat <code>${targetId}</code> aprobado.`)
+  }
+  await tgSend(env, targetId, '❌ El administrador rechazó tu solicitud.')
+  return tgSend(env, adminChat, `Chat <code>${targetId}</code> rechazado.`)
+}
+
+function esc(t) {
+  return String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 async function handleTextCommand(env, msg) {
@@ -128,8 +176,32 @@ async function handleTextCommand(env, msg) {
     return previewTemplate(env, chatId, pend0.tmpl, text.trim())
   }
 
+  // Catalogado: edición de precio / título del borrador en curso.
+  if (pend0?.mode === 'cat_price' && text && !text.startsWith('/') && !isButtonLabel(text)) {
+    const price = Math.round(Number(text.replace(/[.$\s]/g, '').replace(',', '.')))
+    if (!price || price < 1) return tgSend(env, chatId, '❌ Precio inválido. Mandá solo el número, ej: <code>12990</code>')
+    pend0.draft.price = price
+    pend0.mode = 'cat_confirm'
+    await setPending(env, chatId, pend0)
+    return sendCatalogPreview(env, chatId, pend0.draft)
+  }
+  if (pend0?.mode === 'cat_title' && text && !text.startsWith('/') && !isButtonLabel(text)) {
+    pend0.draft.title = cleanTitle(text)
+    pend0.mode = 'cat_confirm'
+    await setPending(env, chatId, pend0)
+    return sendCatalogPreview(env, chatId, pend0.draft)
+  }
+
   // Botonera (reply keyboard) ↔ mismas acciones que los comandos.
   if (text === 'ℹ️ Ayuda' || text === '/start' || text.startsWith('/start@')) return sendStart(env, chatId)
+  if (text === '📸 Catalogar') {
+    await clearPending(env, chatId)
+    return tgSend(env, chatId, '📸 Mandá la(s) foto(s) del producto. Cuando estén todas, tocá <b>Analizar</b>.', { reply_markup: MAIN_KB })
+  }
+  if (text === '📦 Despacho') {
+    await setPending(env, chatId, { mode: 'await_sticker' })
+    return tgSend(env, chatId, '📦 Mandá la foto del sticker de envío para asignar el tracking.', { reply_markup: MAIN_KB })
+  }
   if (text === '🧾 Órdenes')   return sendOrdersList(env, chatId)
   if (text === '📭 Pendientes') return sendPendingList(env, chatId)
   if (text === '📋 Historial')  return sendHistoryMenu(env, chatId)
@@ -188,13 +260,15 @@ async function clearChat(env, chatId, fromMessageId) {
 // ── Botonera + acciones (reutilizadas por comandos y botones inline) ──
 async function sendStart(env, chatId) {
   await tgSend(env, chatId,
-    '✅ <b>Bot MLPU actualizado y operativo.</b>\n\n' +
-    'Ya puedes usar todo desde los botones 👇\n' +
-    '🧾 Órdenes · 📭 Pendientes\n' +
-    '📋 Historial — ventas reales de ML (buscar cliente, hoy, este mes)\n' +
-    '💬 Mensajes — directo, ver conversación y plantillas\n\n' +
-    '📸 Para despachar: envía la foto del sticker y sigue los botones.\n' +
-    '🔑 Si alguna vez se corta la conexión con ML, te aviso por acá y reconectas pegando el código.',
+    '✅ <b>Bot MLPU operativo.</b>\n\n' +
+    '📸 <b>Catalogar</b> (lo principal): mandá fotos de un producto, tocá ' +
+    '<b>Analizar</b> y la IA arma título, precio, categoría y descripción. ' +
+    'Revisás, ajustás con los botones y <b>Publicar</b>. ' +
+    'Siempre sale con envío a cargo del comprador y stock 1.\n\n' +
+    '📦 Despacho — foto del sticker para asignar tracking.\n' +
+    '🧾 Órdenes · 📋 Historial — ventas reales de ML.\n' +
+    '💬 Mensajes — directo, conversación y plantillas.\n\n' +
+    '🔑 Si se corta la conexión con ML, te aviso por acá y reconectás pegando el código.',
     { reply_markup: MAIN_KB })
 }
 
@@ -353,6 +427,40 @@ async function handleCallback(env, cq) {
     const id = data.slice(4)
     await setPending(env, chatId, { mode: 'await_message', order_id: id })
     return tgSend(env, chatId, `✍️ Escribí el texto del mensaje para el comprador de la orden <code>${id}</code>:`)
+  }
+  // ── Módulo 3: catalogado y publicación ──
+  if (data.startsWith('acc:')) {
+    const [, verdict, target] = data.split(':')
+    return approveChat(env, chatId, target, verdict === 'ok')
+  }
+  if (data === 'cat:go')    return runCatalogAnalyze(env, chatId)
+  if (data === 'cat:pub')   return runCatalogPublish(env, chatId)
+  if (data === 'cat:x')   { await clearPending(env, chatId); return tgSend(env, chatId, '🗑 Catalogado cancelado.', { reply_markup: MAIN_KB }) }
+  if (data === 'cat:price') {
+    const p = await getPending(env, chatId)
+    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
+    p.mode = 'cat_price'; await setPending(env, chatId, p)
+    return tgSend(env, chatId, '💲 Mandá el precio nuevo en CLP (solo número, ej: <code>12990</code>):')
+  }
+  if (data === 'cat:title') {
+    const p = await getPending(env, chatId)
+    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
+    p.mode = 'cat_title'; await setPending(env, chatId, p)
+    return tgSend(env, chatId, '✏️ Mandá el título nuevo (máx. 60 caracteres):')
+  }
+  if (data === 'cat:cats') {
+    const p = await getPending(env, chatId)
+    if (p?.mode !== 'cat_confirm' || !p.cats?.length) return tgSend(env, chatId, 'No hay categorías alternativas.')
+    return tgSend(env, chatId, '🏷 Elegí la categoría:', { reply_markup: { inline_keyboard:
+      p.cats.map((c, i) => [{ text: `${c.id === p.draft.categoryId ? '✅ ' : ''}${c.name}`, callback_data: `cat:cat:${i}` }]) } })
+  }
+  if (data.startsWith('cat:cat:')) return runCatalogSetCategory(env, chatId, parseInt(data.slice(8), 10))
+  if (data === 'cat:cond') {
+    const p = await getPending(env, chatId)
+    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
+    p.draft.condition = p.draft.condition === 'new' ? 'used' : 'new'
+    await setPending(env, chatId, p)
+    return sendCatalogPreview(env, chatId, p.draft)
   }
 }
 
@@ -664,13 +772,19 @@ async function sendTemplateConfirmed(env, chatId) {
   })
 }
 
-// ── Paso 3: foto del sticker → tracking ───────────────────────
+// ── Fotos: catalogado (por defecto) o despacho/evidencia ──────
 async function handlePhoto(env, msg) {
   const chatId = msg.chat.id
   const pend = await getPending(env, chatId)
   // Si estamos recolectando fotos del empaque, esta foto se suma a la evidencia.
   if (pend?.mode === 'collect_evidence') return collectEvidencePhoto(env, chatId, msg, pend)
-  return analyzeStickerPhoto(env, chatId, msg)
+  // Despacho: solo si se pidió explícitamente (botón 📦 Despacho).
+  if (pend?.mode === 'await_sticker') {
+    await clearPending(env, chatId)
+    return analyzeStickerPhoto(env, chatId, msg)
+  }
+  // Por defecto: catalogar producto nuevo.
+  return catalogCollectPhoto(env, chatId, msg, pend)
 }
 
 async function collectEvidencePhoto(env, chatId, msg, pend) {
@@ -810,6 +924,177 @@ async function finalizeEvidence(env, chatId, p) {
     `🖼️ Fotos adjuntadas: ${ev.attachOk}` +
       (ev.attachErr?.length ? ` (fallaron ${ev.attachErr.length})` : ''),
   ].join('\n'))
+}
+
+// ── Módulo 3: catalogado y publicación (foto → IA → ML) ───────
+// Reglas fijas: envío SIEMPRE pagado por el comprador, stock SIEMPRE 1.
+// Cada chat aprobado tiene su propio borrador (pending:<chatId>), así dos
+// personas pueden catalogar en paralelo hacia la misma cuenta de ML.
+
+async function catalogCollectPhoto(env, chatId, msg, pend) {
+  const photo = msg.photo[msg.photo.length - 1] // mayor resolución
+  const p = (pend?.mode === 'cat_photos') ? pend : { mode: 'cat_photos', photos: [] }
+  p.photos.push(photo.file_id)
+  await setPending(env, chatId, p)
+  await tgSend(env, chatId,
+    `📸 Foto ${p.photos.length} recibida. Mandá más o tocá <b>Analizar</b>.`,
+    { reply_markup: { inline_keyboard: [[
+      { text: '🤖 Analizar', callback_data: 'cat:go' },
+      { text: '❌ Cancelar', callback_data: 'cat:x' },
+    ]] } })
+}
+
+async function runCatalogAnalyze(env, chatId) {
+  const p = await getPending(env, chatId)
+  if (p?.mode !== 'cat_photos' || !p.photos?.length)
+    return tgSend(env, chatId, 'No hay fotos pendientes. Mandá la(s) foto(s) del producto primero.')
+
+  await tgApi(env, 'sendChatAction', { chat_id: chatId, action: 'typing' })
+  await tgSend(env, chatId, '🤖 Analizando el producto con IA…')
+
+  let b64
+  try {
+    b64 = await tgGetFileBytes(env, p.photos[0])
+  } catch (e) {
+    return tgSend(env, chatId, `❌ No pude descargar la foto: ${e.message}`)
+  }
+
+  let analysis
+  try {
+    analysis = await analyzeProduct(b64, env.ANTHROPIC_API_KEY)
+  } catch (e) {
+    return tgSend(env, chatId, `❌ Error de IA: ${esc(e.message)}`)
+  }
+
+  const cats = await discoverCategories(analysis.categorySearches)
+  const best = cats.find(c => c.id) || null
+  if (!best) {
+    await clearPending(env, chatId)
+    return tgSend(env, chatId,
+      `⚠️ No encontré una categoría de ML para "${esc(analysis.product)}". Probá con otra foto más clara.`)
+  }
+
+  let attrValues = {}
+  try {
+    const required = await getRequiredAttrs(best.id)
+    attrValues = await fillAttributesWithAI(required, analysis, env.ANTHROPIC_API_KEY,
+      { title: analysis.title, description: analysis.description, categoryName: best.name })
+  } catch (e) { logErr('attrs:', e.message) }
+
+  const market = await getMarketPrices(best.id, analysis.title)
+
+  const draft = {
+    title:        analysis.title,
+    price:        analysis.price,
+    description:  analysis.description,
+    condition:    analysis.condition,
+    categoryId:   best.id,
+    categoryName: best.name,
+    attrValues,
+    photos:       p.photos,
+    market,
+  }
+  await setPending(env, chatId, { mode: 'cat_confirm', draft, cats })
+  return sendCatalogPreview(env, chatId, draft)
+}
+
+async function sendCatalogPreview(env, chatId, draft) {
+  const m = draft.market
+  const lines = [
+    '📋 <b>Vista previa de la publicación</b>',
+    '',
+    `📌 <b>${esc(draft.title)}</b>`,
+    `💲 <b>${fmtMoney(draft.price, 'CLP')}</b>` +
+      (m ? `  <i>(mercado: ${fmtMoney(m.min, 'CLP')}–${fmtMoney(m.max, 'CLP')}, mediana ${fmtMoney(m.median, 'CLP')}, ${m.count} avisos)</i>` : ''),
+    `🏷 ${esc(draft.categoryName)} · ${draft.condition === 'new' ? 'Nuevo' : 'Usado'} · 📸 ${draft.photos.length} foto(s)`,
+    `🚚 Envío a cargo del comprador · Stock: 1`,
+  ]
+  const attrs = Object.entries(draft.attrValues || {}).filter(([, v]) => v?.toString().trim())
+  if (attrs.length)
+    lines.push('🔧 ' + attrs.slice(0, 6).map(([k, v]) => `${k}: ${esc(v)}`).join(' · '))
+  lines.push('', `📝 ${esc(draft.description.slice(0, 350))}${draft.description.length > 350 ? '…' : ''}`)
+
+  return tgSend(env, chatId, lines.join('\n'), { reply_markup: { inline_keyboard: [
+    [{ text: '✅ Publicar', callback_data: 'cat:pub' }],
+    [{ text: '💲 Precio', callback_data: 'cat:price' },
+     { text: '✏️ Título', callback_data: 'cat:title' }],
+    [{ text: '🏷 Categoría', callback_data: 'cat:cats' },
+     { text: `🔄 ${draft.condition === 'new' ? 'Nuevo→Usado' : 'Usado→Nuevo'}`, callback_data: 'cat:cond' }],
+    [{ text: '❌ Cancelar', callback_data: 'cat:x' }],
+  ] } })
+}
+
+async function runCatalogSetCategory(env, chatId, idx) {
+  const p = await getPending(env, chatId)
+  if (p?.mode !== 'cat_confirm' || !p.cats?.[idx]) return tgSend(env, chatId, 'No hay un borrador en curso.')
+  const cat = p.cats[idx]
+  p.draft.categoryId = cat.id
+  p.draft.categoryName = cat.name
+  await tgSend(env, chatId, `🏷 Categoría: <b>${esc(cat.name)}</b>. Recalculando atributos…`)
+  try {
+    const required = await getRequiredAttrs(cat.id)
+    p.draft.attrValues = await fillAttributesWithAI(required, p.draft, env.ANTHROPIC_API_KEY,
+      { title: p.draft.title, description: p.draft.description, categoryName: cat.name })
+  } catch (e) { logErr('attrs recat:', e.message) }
+  p.draft.market = await getMarketPrices(cat.id, p.draft.title)
+  await setPending(env, chatId, p)
+  return sendCatalogPreview(env, chatId, p.draft)
+}
+
+async function runCatalogPublish(env, chatId) {
+  const p = await getPending(env, chatId)
+  if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador listo para publicar.')
+  const d = p.draft
+
+  await tgSend(env, chatId, `⏳ Subiendo ${d.photos.length} foto(s) y publicando…`)
+
+  let token
+  try {
+    token = await getValidAccessToken(env)
+  } catch (e) {
+    return tgSend(env, chatId, `❌ Sin conexión con ML: ${esc(e.message)}`)
+  }
+
+  const pictureIds = []
+  for (const fileId of d.photos) {
+    try {
+      const buf = await tgGetFileBuffer(env, fileId)
+      pictureIds.push(await uploadPicture(token, buf))
+    } catch (e) { logErr('subida foto:', e.message) }
+  }
+  if (d.photos.length > 0 && pictureIds.length === 0) {
+    return tgSend(env, chatId,
+      '❌ No se pudo subir ninguna foto a ML; cancelé la publicación para no crear un aviso sin imágenes. Probá de nuevo con <b>Publicar</b>.',
+      { reply_markup: { inline_keyboard: [[{ text: '✅ Publicar', callback_data: 'cat:pub' }, { text: '❌ Cancelar', callback_data: 'cat:x' }]] } })
+  }
+
+  let item
+  try {
+    item = await createListing(token, { ...d, pictureIds })
+  } catch (e) {
+    // El borrador sigue en pending: se puede corregir (título/categoría) y reintentar.
+    return tgSend(env, chatId,
+      `❌ ML rechazó la publicación: ${esc(e.message)}\n\nCorregí lo necesario y volvé a intentar.`,
+      { reply_markup: { inline_keyboard: [
+        [{ text: '✅ Reintentar', callback_data: 'cat:pub' }],
+        [{ text: '✏️ Título', callback_data: 'cat:title' }, { text: '🏷 Categoría', callback_data: 'cat:cats' }],
+        [{ text: '❌ Cancelar', callback_data: 'cat:x' }],
+      ] } })
+  }
+
+  await clearPending(env, chatId)
+  await tgSend(env, chatId, [
+    '🎉 <b>¡Publicado!</b>',
+    `📌 ${esc(d.title)}`,
+    `💲 ${fmtMoney(d.price, 'CLP')} · 🚚 envío a cargo del comprador · stock 1`,
+    `🔗 ${item.permalink || item.id}`,
+  ].join('\n'), { reply_markup: MAIN_KB })
+
+  // Aviso al admin cuando publica un operador.
+  if (String(chatId) !== String(env.TELEGRAM_CHAT_ID)) {
+    await tgSend(env, env.TELEGRAM_CHAT_ID,
+      `📢 Se publicó desde el chat <code>${chatId}</code>:\n${esc(d.title)} — ${fmtMoney(d.price, 'CLP')}\n${item.permalink || item.id}`)
+  }
 }
 
 // ── Descarga de archivo de Telegram → base64 ──────────────────
