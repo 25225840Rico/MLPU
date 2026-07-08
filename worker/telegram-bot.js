@@ -57,6 +57,7 @@ export const tgSend = (env, chatId, text, extra = {}) =>
 // Botonera persistente (reply keyboard) con las acciones principales.
 const MAIN_KB = {
   keyboard: [
+    [{ text: '🤖 Analizar' }],
     [{ text: '📸 Catalogar' }, { text: '📦 Despacho' }],
     [{ text: '🧾 Órdenes' }, { text: '📋 Historial' }],
     [{ text: '💬 Mensajes' }, { text: 'ℹ️ Ayuda' }],
@@ -65,7 +66,7 @@ const MAIN_KB = {
   resize_keyboard: true,
 }
 const isButtonLabel = (t) =>
-  ['📸 Catalogar', '📦 Despacho', '📋 Historial', '💬 Mensajes', '🧾 Órdenes', '📭 Pendientes', 'ℹ️ Ayuda', '🧹 Limpiar'].includes(t)
+  ['🤖 Analizar', '📸 Catalogar', '📦 Despacho', '📋 Historial', '💬 Mensajes', '🧾 Órdenes', '📭 Pendientes', 'ℹ️ Ayuda', '🧹 Limpiar'].includes(t)
 
 // ── Webhook receiver ─────────────────────────────────────────
 export async function handleTelegramWebhook(request, env, ctx) {
@@ -227,14 +228,19 @@ async function handleTextCommand(env, msg) {
 
   // Botonera (reply keyboard) ↔ mismas acciones que los comandos.
   if (text === 'ℹ️ Ayuda' || text === '/start' || text.startsWith('/start@')) return sendStart(env, chatId)
+  if (text === '🤖 Analizar') {
+    const lotId = await openLotId(env, chatId)
+    return runCatalogAnalyze(env, chatId, lotId)
+  }
   if (text === '📸 Catalogar') {
     await clearPending(env, chatId)
     await bumpLotGen(env, chatId)
     return tgSend(env, chatId,
       '📸 Mandá las fotos de los productos — pueden ser <b>varios productos ' +
-      'mezclados</b>.\n\n🔀 Cuando estén todas, tocá <b>Analizar</b> (una sola ' +
-      'vez): la IA separa los productos y te manda una vista previa de cada ' +
-      'uno para publicarlos por separado.',
+      'mezclados</b>; a cada una le pongo un 👍 cuando la recibo.\n\n' +
+      '🔀 Cuando estén todas, tocá <b>🤖 Analizar</b> (abajo, una sola vez): ' +
+      'la IA separa los productos y te manda una vista previa de cada uno ' +
+      'para publicarlos por separado.',
       { reply_markup: MAIN_KB })
   }
   if (text === '📦 Despacho') {
@@ -1057,8 +1063,6 @@ async function deleteLot(env, chatId, lotId) {
   if (lotId === (await openLotId(env, chatId))) await bumpLotGen(env, chatId)
 }
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-
 async function catalogCollectPhoto(env, chatId, msg) {
   const photo = msg.photo[msg.photo.length - 1] // mayor resolución
 
@@ -1069,39 +1073,17 @@ async function catalogCollectPhoto(env, chatId, msg) {
   await env.ML_ORDERS.put(LOT_PHOTO_KEY(chatId, lotId, msg.message_id), '1',
     { metadata: { fid: photo.file_id }, expirationTtl: LOT_TTL })
 
-  // Las fotos de una tanda llegan como updates SIMULTÁNEOS: si cada uno
-  // manda su mensaje de estado salen N mensajes "1 foto recibida" (visto en
-  // la prueba real del 2026-07-08). Debounce con claim: cada invocación
-  // reclama el turno con su message_id, espera a que la ráfaga se asiente y
-  // solo la que sigue siendo la última publica/edita el mensaje de estado
-  // (KV es last-write-wins ⇒ gana exactamente una).
-  const claimKey = `lotclaim:${chatId}:${lotId}`
-  await env.ML_ORDERS.put(claimKey, String(msg.message_id), { expirationTtl: 300 })
-  await sleep(2500)
-  if ((await env.ML_ORDERS.get(claimKey)) !== String(msg.message_id)) return
-
-  const n = (await listLotPhotos(env, chatId, lotId)).length
-  const text =
-    `📸 <b>${n} foto(s) recibidas.</b>\n` +
-    'Mandá el resto y, cuando estén todas, tocá <b>Analizar</b>: la IA separa ' +
-    'los productos y te da una vista previa de cada uno. 🔀'
-  const kb = { inline_keyboard: [
-    [{ text: '🤖 Analizar', callback_data: `cat:go:${lotId}` }],
-    [{ text: '🗑 Descartar fotos', callback_data: `cat:x:${lotId}` }],
-  ] }
-
-  // Un ÚNICO mensaje de estado con UN botón Analizar: se edita con el conteo
-  // actualizado.
-  const prevMsgId = await env.ML_ORDERS.get(LOT_MSG_KEY(chatId, lotId))
-  if (prevMsgId) {
-    const r = await tgApi(env, 'editMessageText',
-      { chat_id: chatId, message_id: Number(prevMsgId), text, parse_mode: 'HTML', reply_markup: kb })
-    if (r.ok) return
-  }
-  const sent = await tgSend(env, chatId, text, { reply_markup: kb })
-  if (sent.ok) {
-    await env.ML_ORDERS.put(LOT_MSG_KEY(chatId, lotId), String(sent.result.message_id), { expirationTtl: LOT_TTL })
-  }
+  // CERO mensajes por foto. Las fotos de una tanda llegan como updates
+  // simultáneos y las lecturas de KV pueden servir valores viejos hasta 60 s
+  // (caché por colo), así que cualquier "mensaje de estado único" coordinado
+  // por KV termina duplicado (probado 2 veces el 2026-07-08: 7 fotos → 7
+  // mensajes). En su lugar: reacción 👍 a cada foto como acuse de recibo
+  // (no requiere coordinación) y el análisis se dispara con el botón fijo
+  // "🤖 Analizar" del teclado principal.
+  await tgApi(env, 'setMessageReaction', {
+    chat_id: chatId, message_id: msg.message_id,
+    reaction: [{ type: 'emoji', emoji: '👍' }],
+  })
 }
 
 // Divide un lote en sub-lotes según los grupos que detectó la IA.
