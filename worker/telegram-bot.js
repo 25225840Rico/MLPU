@@ -176,37 +176,45 @@ async function handleTextCommand(env, msg) {
     return previewTemplate(env, chatId, pend0.tmpl, text.trim())
   }
 
-  // Catalogado: edición de precio / título del borrador en curso.
-  if (pend0?.mode === 'cat_price' && text && !text.startsWith('/') && !isButtonLabel(text)) {
-    const raw = Math.round(Number(text.replace(/[.$\s]/g, '').replace(',', '.')))
-    if (!raw || raw < 1) return tgSend(env, chatId, '❌ Precio inválido. Mandá solo el número, ej: <code>12990</code>')
-    const price = roundTo990(raw)
-    if (price !== raw) await tgSend(env, chatId, `ℹ️ Precio ajustado a terminación 990: <b>${fmtMoney(price, 'CLP')}</b>`)
-    pend0.draft.price = price
-    pend0.mode = 'cat_confirm'
-    await setPending(env, chatId, pend0)
-    return sendCatalogPreview(env, chatId, pend0.draft)
-  }
-  if (pend0?.mode === 'cat_title' && text && !text.startsWith('/') && !isButtonLabel(text)) {
-    pend0.draft.title = cleanTitle(text)
-    pend0.mode = 'cat_confirm'
-    await setPending(env, chatId, pend0)
-    return sendCatalogPreview(env, chatId, pend0.draft)
-  }
-  if (pend0?.mode === 'cat_qty' && text && !text.startsWith('/') && !isButtonLabel(text)) {
-    const qty = Math.round(Number(text.replace(/[.\s]/g, '')))
-    if (!qty || qty < 1 || qty > 9999) return tgSend(env, chatId, '❌ Cantidad inválida. Mandá solo el número, ej: <code>3</code>')
-    pend0.draft.qty = qty
-    pend0.mode = 'cat_confirm'
-    await setPending(env, chatId, pend0)
-    return sendCatalogPreview(env, chatId, pend0.draft)
+  // Catalogado: edición de precio / título / cantidad del lote apuntado por
+  // el pending (el borrador vive por-lote en lotd:<chat>:<lote>).
+  if (['cat_price', 'cat_title', 'cat_qty'].includes(pend0?.mode) && text && !text.startsWith('/') && !isButtonLabel(text)) {
+    const lotId = pend0.lotId
+    const p = await getLotDraft(env, chatId, lotId)
+    if (!p?.draft) {
+      await clearPending(env, chatId)
+      return tgSend(env, chatId, 'Ese borrador ya no existe (se publicó, descartó o expiró).', { reply_markup: MAIN_KB })
+    }
+    if (pend0.mode === 'cat_price') {
+      const raw = Math.round(Number(text.replace(/[.$\s]/g, '').replace(',', '.')))
+      if (!raw || raw < 1) return tgSend(env, chatId, '❌ Precio inválido. Mandá solo el número, ej: <code>12990</code>')
+      const price = roundTo990(raw)
+      if (price !== raw) await tgSend(env, chatId, `ℹ️ Precio ajustado a terminación 990: <b>${fmtMoney(price, 'CLP')}</b>`)
+      p.draft.price = price
+    } else if (pend0.mode === 'cat_title') {
+      p.draft.title = cleanTitle(text)
+    } else {
+      const qty = Math.round(Number(text.replace(/[.\s]/g, '')))
+      if (!qty || qty < 1 || qty > 9999) return tgSend(env, chatId, '❌ Cantidad inválida. Mandá solo el número, ej: <code>3</code>')
+      p.draft.qty = qty
+    }
+    await setLotDraft(env, chatId, lotId, p)
+    await clearPending(env, chatId)
+    return sendCatalogPreview(env, chatId, lotId, p.draft)
   }
 
   // Botonera (reply keyboard) ↔ mismas acciones que los comandos.
   if (text === 'ℹ️ Ayuda' || text === '/start' || text.startsWith('/start@')) return sendStart(env, chatId)
   if (text === '📸 Catalogar') {
     await clearPending(env, chatId)
-    return tgSend(env, chatId, '📸 Mandá la(s) foto(s) del producto. Cuando estén todas, tocá <b>Analizar</b>.', { reply_markup: MAIN_KB })
+    await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
+    return tgSend(env, chatId,
+      '📸 Mandá las fotos de los productos.\n\n' +
+      '🧺 <b>Podés catalogar varios a la vez</b>: mandá cada producto como un ' +
+      '<b>álbum</b> (seleccioná sus fotos juntas) y cada álbum se convierte en ' +
+      'un lote con su propio análisis y publicación. Las fotos sueltas se ' +
+      'juntan en un solo lote hasta que toques <b>Analizar</b> u <b>🆕 Otro producto</b>.',
+      { reply_markup: MAIN_KB })
   }
   if (text === '📦 Despacho') {
     await setPending(env, chatId, { mode: 'await_sticker' })
@@ -277,10 +285,11 @@ async function clearChat(env, chatId, fromMessageId) {
 async function sendStart(env, chatId) {
   await tgSend(env, chatId,
     '✅ <b>Bot MLPU operativo.</b>\n\n' +
-    '📸 <b>Catalogar</b> (lo principal): mandá fotos de un producto, tocá ' +
-    '<b>Analizar</b> y la IA arma título, precio, categoría y descripción. ' +
-    'Revisás, ajustás con los botones y <b>Publicar</b>. ' +
-    'Siempre sale con envío a cargo del comprador y stock 1.\n\n' +
+    '📸 <b>Catalogar</b> (lo principal): mandá fotos, tocá <b>Analizar</b> y ' +
+    'la IA arma título, precio, categoría y descripción. Revisás, ajustás con ' +
+    'los botones y <b>Publicar</b>. Envío a cargo del comprador y stock 1 por defecto.\n' +
+    '🧺 <b>Por lotes</b>: mandá varios productos a la vez, cada uno como un ' +
+    'álbum de fotos — cada álbum se analiza y publica por separado.\n\n' +
     '📦 Despacho — foto del sticker para asignar tracking.\n' +
     '🧾 Órdenes · 📋 Historial — ventas reales de ML.\n' +
     '💬 Mensajes — directo, conversación y plantillas.\n\n' +
@@ -444,52 +453,69 @@ async function handleCallback(env, cq) {
     await setPending(env, chatId, { mode: 'await_message', order_id: id })
     return tgSend(env, chatId, `✍️ Escribí el texto del mensaje para el comprador de la orden <code>${id}</code>:`)
   }
-  // ── Módulo 3: catalogado y publicación ──
+  // ── Módulo 3: catalogado y publicación por lotes ──
   if (data.startsWith('acc:')) {
     const [, verdict, target] = data.split(':')
     return approveChat(env, chatId, target, verdict === 'ok')
   }
-  if (data === 'cat:go')    return runCatalogAnalyze(env, chatId)
-  if (data === 'cat:pub')   return runCatalogPublish(env, chatId)
-  if (data === 'cat:x')   { await clearPending(env, chatId); return tgSend(env, chatId, '🗑 Catalogado cancelado.', { reply_markup: MAIN_KB }) }
-  if (data === 'cat:price') {
-    const p = await getPending(env, chatId)
-    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
-    p.mode = 'cat_price'; await setPending(env, chatId, p)
-    return tgSend(env, chatId, '💲 Mandá el precio nuevo en CLP (solo número, ej: <code>12990</code>):')
+  if (data === 'cat:new') {
+    await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
+    return tgSend(env, chatId, '🆕 Listo: las próximas fotos sueltas abren un producto nuevo. (Los álbumes ya son productos aparte solos.)')
   }
-  if (data === 'cat:qty') {
-    const p = await getPending(env, chatId)
-    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
-    p.mode = 'cat_qty'; await setPending(env, chatId, p)
-    return tgSend(env, chatId, '🔢 Mandá la cantidad de unidades (solo número, ej: <code>3</code>):')
+  if (data.startsWith('cat:go:'))    return runCatalogAnalyze(env, chatId, data.slice(7))
+  if (data.startsWith('cat:pub:'))   return runCatalogPublish(env, chatId, data.slice(8))
+  if (data.startsWith('cat:x:')) {
+    const lotId = data.slice(6)
+    await deleteLot(env, chatId, lotId)
+    return tgSend(env, chatId, `🗑 Lote ${lotLabel(lotId)} descartado.`, { reply_markup: MAIN_KB })
   }
-  if (data === 'cat:ship') {
-    const p = await getPending(env, chatId)
-    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
+  if (data === 'cat:x') { await clearPending(env, chatId); return tgSend(env, chatId, '🗑 Catalogado cancelado.', { reply_markup: MAIN_KB }) }
+  if (data.startsWith('cat:price:')) {
+    const lotId = data.slice(10)
+    if (!(await getLotDraft(env, chatId, lotId))) return tgSend(env, chatId, 'Ese borrador ya no existe.')
+    await setPending(env, chatId, { mode: 'cat_price', lotId })
+    return tgSend(env, chatId, `💲 Lote ${lotLabel(lotId)}: mandá el precio nuevo en CLP (solo número, ej: <code>12990</code>):`)
+  }
+  if (data.startsWith('cat:qty:')) {
+    const lotId = data.slice(8)
+    if (!(await getLotDraft(env, chatId, lotId))) return tgSend(env, chatId, 'Ese borrador ya no existe.')
+    await setPending(env, chatId, { mode: 'cat_qty', lotId })
+    return tgSend(env, chatId, `🔢 Lote ${lotLabel(lotId)}: mandá la cantidad de unidades (solo número, ej: <code>3</code>):`)
+  }
+  if (data.startsWith('cat:title:')) {
+    const lotId = data.slice(10)
+    if (!(await getLotDraft(env, chatId, lotId))) return tgSend(env, chatId, 'Ese borrador ya no existe.')
+    await setPending(env, chatId, { mode: 'cat_title', lotId })
+    return tgSend(env, chatId, `✏️ Lote ${lotLabel(lotId)}: mandá el título nuevo (máx. 60 caracteres):`)
+  }
+  if (data.startsWith('cat:ship:')) {
+    const lotId = data.slice(9)
+    const p = await getLotDraft(env, chatId, lotId)
+    if (!p?.draft) return tgSend(env, chatId, 'Ese borrador ya no existe.')
     p.draft.freeShipping = !p.draft.freeShipping
-    await setPending(env, chatId, p)
-    return sendCatalogPreview(env, chatId, p.draft)
+    await setLotDraft(env, chatId, lotId, p)
+    return sendCatalogPreview(env, chatId, lotId, p.draft)
   }
-  if (data === 'cat:title') {
-    const p = await getPending(env, chatId)
-    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
-    p.mode = 'cat_title'; await setPending(env, chatId, p)
-    return tgSend(env, chatId, '✏️ Mandá el título nuevo (máx. 60 caracteres):')
-  }
-  if (data === 'cat:cats') {
-    const p = await getPending(env, chatId)
-    if (p?.mode !== 'cat_confirm' || !p.cats?.length) return tgSend(env, chatId, 'No hay categorías alternativas.')
-    return tgSend(env, chatId, '🏷 Elegí la categoría:', { reply_markup: { inline_keyboard:
-      p.cats.map((c, i) => [{ text: `${c.id === p.draft.categoryId ? '✅ ' : ''}${c.name}`, callback_data: `cat:cat:${i}` }]) } })
-  }
-  if (data.startsWith('cat:cat:')) return runCatalogSetCategory(env, chatId, parseInt(data.slice(8), 10))
-  if (data === 'cat:cond') {
-    const p = await getPending(env, chatId)
-    if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador en curso.')
+  if (data.startsWith('cat:cond:')) {
+    const lotId = data.slice(9)
+    const p = await getLotDraft(env, chatId, lotId)
+    if (!p?.draft) return tgSend(env, chatId, 'Ese borrador ya no existe.')
     p.draft.condition = p.draft.condition === 'new' ? 'used' : 'new'
-    await setPending(env, chatId, p)
-    return sendCatalogPreview(env, chatId, p.draft)
+    await setLotDraft(env, chatId, lotId, p)
+    return sendCatalogPreview(env, chatId, lotId, p.draft)
+  }
+  if (data.startsWith('cat:setc:')) {
+    // cat:setc:<lotId>:<idx> — el lotId no contiene ':' (g<digitos> o s<digitos>)
+    const rest = data.slice(9)
+    const sep = rest.lastIndexOf(':')
+    return runCatalogSetCategory(env, chatId, rest.slice(0, sep), parseInt(rest.slice(sep + 1), 10))
+  }
+  if (data.startsWith('cat:cats:')) {
+    const lotId = data.slice(9)
+    const p = await getLotDraft(env, chatId, lotId)
+    if (!p?.cats?.length) return tgSend(env, chatId, 'No hay categorías alternativas.')
+    return tgSend(env, chatId, `🏷 Lote ${lotLabel(lotId)} — elegí la categoría:`, { reply_markup: { inline_keyboard:
+      p.cats.map((c, i) => [{ text: `${c.id === p.draft.categoryId ? '✅ ' : ''}${c.name}`, callback_data: `cat:setc:${lotId}:${i}` }]) } })
   }
 }
 
@@ -812,8 +838,8 @@ async function handlePhoto(env, msg) {
     await clearPending(env, chatId)
     return analyzeStickerPhoto(env, chatId, msg)
   }
-  // Por defecto: catalogar producto nuevo.
-  return catalogCollectPhoto(env, chatId, msg, pend)
+  // Por defecto: catalogar. Cada álbum de Telegram = un lote/producto aparte.
+  return catalogCollectPhoto(env, chatId, msg)
 }
 
 async function collectEvidencePhoto(env, chatId, msg, pend) {
@@ -955,35 +981,109 @@ async function finalizeEvidence(env, chatId, p) {
   ].join('\n'))
 }
 
-// ── Módulo 3: catalogado y publicación (foto → IA → ML) ───────
+// ── Módulo 3: catalogado y publicación por LOTES (fotos → IA → ML) ───────
 // Reglas fijas: envío SIEMPRE pagado por el comprador, stock SIEMPRE 1.
-// Cada chat aprobado tiene su propio borrador (pending:<chatId>), así dos
-// personas pueden catalogar en paralelo hacia la misma cuenta de ML.
+//
+// Un LOTE = un producto. Cada álbum de Telegram (media_group_id) abre su
+// propio lote automáticamente; las fotos sueltas se agrupan en el lote
+// "abierto" del chat. Así se pueden mandar fotos de varios productos a la
+// vez y cada uno se analiza y publica por separado, en paralelo.
+//
+// Cada foto se guarda en SU PROPIA clave KV (lotp:<chat>:<lote>:<msgId>,
+// con el file_id en metadata). Nada de leer-modificar-escribir sobre una
+// clave compartida: las fotos de un álbum llegan como updates simultáneos
+// y las escrituras concurrentes se pisaban (así se rompía el flujo viejo).
+const LOT_PHOTO_PFX = (chatId, lotId) => `lotp:${chatId}:${lotId}:`
+const LOT_PHOTO_KEY = (chatId, lotId, msgId) => `${LOT_PHOTO_PFX(chatId, lotId)}${String(msgId).padStart(12, '0')}`
+const LOT_DRAFT_KEY = (chatId, lotId) => `lotd:${chatId}:${lotId}`
+const LOT_MSG_KEY   = (chatId, lotId) => `lotm:${chatId}:${lotId}`
+const SOLO_LOT_KEY  = (chatId) => `lotcur:${chatId}`
+const LOT_TTL = 7200 // 2 h para armar/revisar/publicar un lote
 
-async function catalogCollectPhoto(env, chatId, msg, pend) {
-  const photo = msg.photo[msg.photo.length - 1] // mayor resolución
-  const p = (pend?.mode === 'cat_photos') ? pend : { mode: 'cat_photos', photos: [] }
-  p.photos.push(photo.file_id)
-  await setPending(env, chatId, p)
-  await tgSend(env, chatId,
-    `📸 Foto ${p.photos.length} recibida. Mandá más o tocá <b>Analizar</b>.`,
-    { reply_markup: { inline_keyboard: [[
-      { text: '🤖 Analizar', callback_data: 'cat:go' },
-      { text: '❌ Cancelar', callback_data: 'cat:x' },
-    ]] } })
+const lotLabel = (lotId) => `#${String(lotId).slice(-4)}`
+
+// file_ids del lote, en el orden en que llegaron (message_id ascendente:
+// las claves KV se listan en orden lexicográfico y el msgId va con padding).
+async function listLotPhotos(env, chatId, lotId) {
+  const res = await env.ML_ORDERS.list({ prefix: LOT_PHOTO_PFX(chatId, lotId), limit: 100 })
+  return res.keys.map(k => k.metadata?.fid).filter(Boolean)
 }
 
-async function runCatalogAnalyze(env, chatId) {
-  const p = await getPending(env, chatId)
-  if (p?.mode !== 'cat_photos' || !p.photos?.length)
-    return tgSend(env, chatId, 'No hay fotos pendientes. Mandá la(s) foto(s) del producto primero.')
+async function getLotDraft(env, chatId, lotId) {
+  try { return JSON.parse(await env.ML_ORDERS.get(LOT_DRAFT_KEY(chatId, lotId))) } catch { return null }
+}
+async function setLotDraft(env, chatId, lotId, state) {
+  await env.ML_ORDERS.put(LOT_DRAFT_KEY(chatId, lotId), JSON.stringify(state), { expirationTtl: LOT_TTL })
+}
+
+async function deleteLot(env, chatId, lotId) {
+  const res = await env.ML_ORDERS.list({ prefix: LOT_PHOTO_PFX(chatId, lotId), limit: 100 })
+  await Promise.all(res.keys.map(k => env.ML_ORDERS.delete(k.name)))
+  await env.ML_ORDERS.delete(LOT_DRAFT_KEY(chatId, lotId))
+  await env.ML_ORDERS.delete(LOT_MSG_KEY(chatId, lotId))
+  if ((await env.ML_ORDERS.get(SOLO_LOT_KEY(chatId))) === lotId) {
+    await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
+  }
+}
+
+async function catalogCollectPhoto(env, chatId, msg) {
+  const photo = msg.photo[msg.photo.length - 1] // mayor resolución
+
+  // Álbum → lote propio (determinístico, sin carreras). Foto suelta → lote
+  // "abierto" del chat (se crea si no hay; "🆕 Otro producto" lo cierra).
+  let lotId
+  if (msg.media_group_id) {
+    lotId = `g${msg.media_group_id}`
+  } else {
+    lotId = await env.ML_ORDERS.get(SOLO_LOT_KEY(chatId))
+    if (!lotId) lotId = `s${msg.message_id}`
+    await env.ML_ORDERS.put(SOLO_LOT_KEY(chatId), lotId, { expirationTtl: 900 })
+  }
+
+  await env.ML_ORDERS.put(LOT_PHOTO_KEY(chatId, lotId, msg.message_id), '1',
+    { metadata: { fid: photo.file_id }, expirationTtl: LOT_TTL })
+
+  const n = (await listLotPhotos(env, chatId, lotId)).length
+  const text =
+    `📸 <b>Lote ${lotLabel(lotId)}</b>: ${n} foto(s).\n` +
+    'Cada álbum es un producto aparte. Mandá más fotos o tocá <b>Analizar</b>.'
+  const kb = { inline_keyboard: [
+    [{ text: `🤖 Analizar lote ${lotLabel(lotId)}`, callback_data: `cat:go:${lotId}` }],
+    [{ text: '🆕 Otro producto', callback_data: 'cat:new' },
+     { text: '🗑 Descartar lote', callback_data: `cat:x:${lotId}` }],
+  ] }
+
+  // Un solo mensaje de estado por lote: se edita con el conteo actualizado
+  // (las fotos de un álbum llegan en ráfaga; mandar uno por foto era spam).
+  const prevMsgId = await env.ML_ORDERS.get(LOT_MSG_KEY(chatId, lotId))
+  if (prevMsgId) {
+    const r = await tgApi(env, 'editMessageText',
+      { chat_id: chatId, message_id: Number(prevMsgId), text, parse_mode: 'HTML', reply_markup: kb })
+    if (r.ok) return
+  }
+  const sent = await tgSend(env, chatId, text, { reply_markup: kb })
+  if (sent.ok) {
+    await env.ML_ORDERS.put(LOT_MSG_KEY(chatId, lotId), String(sent.result.message_id), { expirationTtl: LOT_TTL })
+  }
+}
+
+async function runCatalogAnalyze(env, chatId, lotId) {
+  const photos = await listLotPhotos(env, chatId, lotId)
+  if (!photos.length)
+    return tgSend(env, chatId, `El lote ${lotLabel(lotId)} no tiene fotos (o expiró). Mandá las fotos de nuevo.`)
+
+  // Si era el lote "abierto" de fotos sueltas, se cierra: las próximas fotos
+  // sueltas arrancan un producto nuevo mientras este se revisa/publica.
+  if ((await env.ML_ORDERS.get(SOLO_LOT_KEY(chatId))) === lotId) {
+    await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
+  }
 
   await tgApi(env, 'sendChatAction', { chat_id: chatId, action: 'typing' })
-  await tgSend(env, chatId, '🤖 Analizando el producto con IA…')
+  await tgSend(env, chatId, `🤖 Analizando el lote ${lotLabel(lotId)} (${photos.length} foto(s)) con IA…`)
 
   // Hasta 3 fotos al análisis (más contexto = marca/modelo/specs más fiables),
   // descargadas en paralelo. Si alguna falla se sigue con las que haya.
-  const buffers = await Promise.all(p.photos.slice(0, 3).map(id =>
+  const buffers = await Promise.all(photos.slice(0, 3).map(id =>
     tgGetFileBytes(env, id).catch(e => { logErr('descarga foto análisis:', e.message); return null })))
   const imagesB64 = buffers.filter(Boolean)
   if (!imagesB64.length) return tgSend(env, chatId, '❌ No pude descargar las fotos. Probá de nuevo.')
@@ -992,15 +1092,19 @@ async function runCatalogAnalyze(env, chatId) {
   try {
     analysis = await analyzeProduct(imagesB64, env.ANTHROPIC_API_KEY)
   } catch (e) {
-    return tgSend(env, chatId, `❌ Error de IA: ${esc(e.message)}`)
+    return tgSend(env, chatId, `❌ Error de IA en el lote ${lotLabel(lotId)}: ${esc(e.message)}`)
   }
 
   const cats = await discoverCategories(analysis.categorySearches)
   const best = cats.find(c => c.id) || null
   if (!best) {
-    await clearPending(env, chatId)
     return tgSend(env, chatId,
-      `⚠️ No encontré una categoría de ML para "${esc(analysis.product)}". Probá con otra foto más clara.`)
+      `⚠️ No encontré una categoría de ML para "${esc(analysis.product)}" (lote ${lotLabel(lotId)}). ` +
+      'Agregá una foto más clara al lote y volvé a Analizar.',
+      { reply_markup: { inline_keyboard: [[
+        { text: `🤖 Reanalizar`, callback_data: `cat:go:${lotId}` },
+        { text: '🗑 Descartar lote', callback_data: `cat:x:${lotId}` },
+      ]] } })
   }
 
   // Atributos (ML + IA) y precios de mercado en paralelo: no dependen entre sí.
@@ -1030,15 +1134,15 @@ async function runCatalogAnalyze(env, chatId) {
     categoryId:   best.id,
     categoryName: best.name,
     attrValues,
-    photos:       p.photos,
+    photos,
     market,
     qty:          1,
   }
-  await setPending(env, chatId, { mode: 'cat_confirm', draft, cats })
-  return sendCatalogPreview(env, chatId, draft)
+  await setLotDraft(env, chatId, lotId, { draft, cats })
+  return sendCatalogPreview(env, chatId, lotId, draft)
 }
 
-async function sendCatalogPreview(env, chatId, draft) {
+async function sendCatalogPreview(env, chatId, lotId, draft) {
   const m = draft.market
 
   // Ganancia estimada: comisión real de ML + costo de envío si lo paga el
@@ -1055,7 +1159,7 @@ async function sendCatalogPreview(env, chatId, draft) {
   } catch (e) { logErr('estimateProfit:', e.message) }
 
   const lines = [
-    '📋 <b>Vista previa de la publicación</b>',
+    `📋 <b>Vista previa — lote ${lotLabel(lotId)}</b>`,
     '',
     `📌 <b>${esc(draft.title)}</b>`,
     `💲 <b>${fmtMoney(draft.price, 'CLP')}</b>` +
@@ -1070,20 +1174,20 @@ async function sendCatalogPreview(env, chatId, draft) {
   lines.push('', `📝 ${esc(draft.description.slice(0, 350))}${draft.description.length > 350 ? '…' : ''}`)
 
   return tgSend(env, chatId, lines.join('\n'), { reply_markup: { inline_keyboard: [
-    [{ text: '✅ Publicar', callback_data: 'cat:pub' }],
-    [{ text: '💲 Precio', callback_data: 'cat:price' },
-     { text: '✏️ Título', callback_data: 'cat:title' },
-     { text: '🔢 Cantidad', callback_data: 'cat:qty' }],
-    [{ text: '🏷 Categoría', callback_data: 'cat:cats' },
-     { text: `🔄 ${draft.condition === 'new' ? 'Nuevo→Usado' : 'Usado→Nuevo'}`, callback_data: 'cat:cond' }],
-    [{ text: `🚚 ${draft.freeShipping ? 'Cambiar a envío por comprador' : 'Cambiar a envío gratis (vendedor)'}`, callback_data: 'cat:ship' }],
-    [{ text: '❌ Cancelar', callback_data: 'cat:x' }],
+    [{ text: '✅ Publicar', callback_data: `cat:pub:${lotId}` }],
+    [{ text: '💲 Precio', callback_data: `cat:price:${lotId}` },
+     { text: '✏️ Título', callback_data: `cat:title:${lotId}` },
+     { text: '🔢 Cantidad', callback_data: `cat:qty:${lotId}` }],
+    [{ text: '🏷 Categoría', callback_data: `cat:cats:${lotId}` },
+     { text: `🔄 ${draft.condition === 'new' ? 'Nuevo→Usado' : 'Usado→Nuevo'}`, callback_data: `cat:cond:${lotId}` }],
+    [{ text: `🚚 ${draft.freeShipping ? 'Cambiar a envío por comprador' : 'Cambiar a envío gratis (vendedor)'}`, callback_data: `cat:ship:${lotId}` }],
+    [{ text: '❌ Descartar lote', callback_data: `cat:x:${lotId}` }],
   ] } })
 }
 
-async function runCatalogSetCategory(env, chatId, idx) {
-  const p = await getPending(env, chatId)
-  if (p?.mode !== 'cat_confirm' || !p.cats?.[idx]) return tgSend(env, chatId, 'No hay un borrador en curso.')
+async function runCatalogSetCategory(env, chatId, lotId, idx) {
+  const p = await getLotDraft(env, chatId, lotId)
+  if (!p?.cats?.[idx]) return tgSend(env, chatId, `El borrador del lote ${lotLabel(lotId)} ya no existe.`)
   const cat = p.cats[idx]
   p.draft.categoryId = cat.id
   p.draft.categoryName = cat.name
@@ -1094,16 +1198,16 @@ async function runCatalogSetCategory(env, chatId, idx) {
       { title: p.draft.title, description: p.draft.description, categoryName: cat.name })
   } catch (e) { logErr('attrs recat:', e.message) }
   p.draft.market = await getMarketPrices(cat.id, p.draft.title)
-  await setPending(env, chatId, p)
-  return sendCatalogPreview(env, chatId, p.draft)
+  await setLotDraft(env, chatId, lotId, p)
+  return sendCatalogPreview(env, chatId, lotId, p.draft)
 }
 
-async function runCatalogPublish(env, chatId) {
-  const p = await getPending(env, chatId)
-  if (p?.mode !== 'cat_confirm') return tgSend(env, chatId, 'No hay un borrador listo para publicar.')
+async function runCatalogPublish(env, chatId, lotId) {
+  const p = await getLotDraft(env, chatId, lotId)
+  if (!p?.draft) return tgSend(env, chatId, `No hay un borrador listo en el lote ${lotLabel(lotId)}.`)
   const d = p.draft
 
-  await tgSend(env, chatId, `⏳ Subiendo ${d.photos.length} foto(s) y publicando…`)
+  await tgSend(env, chatId, `⏳ Lote ${lotLabel(lotId)}: subiendo ${d.photos.length} foto(s) y publicando…`)
 
   let token
   try {
@@ -1123,25 +1227,25 @@ async function runCatalogPublish(env, chatId) {
   const pictureIds = uploaded.filter(Boolean)
   if (d.photos.length > 0 && pictureIds.length === 0) {
     return tgSend(env, chatId,
-      '❌ No se pudo subir ninguna foto a ML; cancelé la publicación para no crear un aviso sin imágenes. Probá de nuevo con <b>Publicar</b>.',
-      { reply_markup: { inline_keyboard: [[{ text: '✅ Publicar', callback_data: 'cat:pub' }, { text: '❌ Cancelar', callback_data: 'cat:x' }]] } })
+      `❌ Lote ${lotLabel(lotId)}: no se pudo subir ninguna foto a ML; cancelé la publicación para no crear un aviso sin imágenes. Probá de nuevo con <b>Publicar</b>.`,
+      { reply_markup: { inline_keyboard: [[{ text: '✅ Publicar', callback_data: `cat:pub:${lotId}` }, { text: '🗑 Descartar lote', callback_data: `cat:x:${lotId}` }]] } })
   }
 
   let item
   try {
     item = await createListing(token, { ...d, pictureIds })
   } catch (e) {
-    // El borrador sigue en pending: se puede corregir (título/categoría) y reintentar.
+    // El borrador del lote sigue guardado: se puede corregir y reintentar.
     return tgSend(env, chatId,
-      `❌ ML rechazó la publicación: ${esc(e.message)}\n\nCorregí lo necesario y volvé a intentar.`,
+      `❌ ML rechazó la publicación del lote ${lotLabel(lotId)}: ${esc(e.message)}\n\nCorregí lo necesario y volvé a intentar.`,
       { reply_markup: { inline_keyboard: [
-        [{ text: '✅ Reintentar', callback_data: 'cat:pub' }],
-        [{ text: '✏️ Título', callback_data: 'cat:title' }, { text: '🏷 Categoría', callback_data: 'cat:cats' }],
-        [{ text: '❌ Cancelar', callback_data: 'cat:x' }],
+        [{ text: '✅ Reintentar', callback_data: `cat:pub:${lotId}` }],
+        [{ text: '✏️ Título', callback_data: `cat:title:${lotId}` }, { text: '🏷 Categoría', callback_data: `cat:cats:${lotId}` }],
+        [{ text: '🗑 Descartar lote', callback_data: `cat:x:${lotId}` }],
       ] } })
   }
 
-  await clearPending(env, chatId)
+  await deleteLot(env, chatId, lotId)
   await tgSend(env, chatId, [
     '🎉 <b>¡Publicado!</b>',
     `📌 ${esc(d.title)}`,
