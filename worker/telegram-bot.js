@@ -69,6 +69,20 @@ const isButtonLabel = (t) =>
 
 // ── Webhook receiver ─────────────────────────────────────────
 export async function handleTelegramWebhook(request, env, ctx) {
+  // La URL del webhook es pública: antes de tocar KV o procesar nada se
+  // verifica que el POST venga de Telegram, vía el secret del webhook
+  // (setWebhook con secret_token; Telegram lo repite en este header en cada
+  // update). Sin esto, cualquiera podría envenenar el dedupe por update_id
+  // o generar escrituras KV. Si el secret no está configurado se mantiene
+  // el comportamiento anterior (solo control de acceso por chat).
+  if (env.TELEGRAM_WEBHOOK_SECRET) {
+    const got = request.headers.get('X-Telegram-Bot-Api-Secret-Token') || ''
+    if (got !== env.TELEGRAM_WEBHOOK_SECRET) {
+      logErr('Webhook con secret inválido — descartado')
+      return new Response('unauthorized', { status: 401 })
+    }
+  }
+
   let update
   try {
     update = await request.json()
