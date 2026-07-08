@@ -77,8 +77,15 @@ export async function handleTelegramWebhook(request, env, ctx) {
     return new Response('ok') // 200 siempre: evita reintentos en bucle de Telegram
   }
 
-  // Procesamos en segundo plano (visión + ML pueden tardar) y devolvemos 200 ya,
-  // para que Telegram no agote el timeout ni reintente duplicando.
+  // Si Telegram reintenta un update (p.ej. porque un análisis de varios
+  // productos superó su timeout de ~60 s), no se reprocesa: quedaría todo
+  // duplicado (dobles análisis, dobles publicaciones).
+  if (update.update_id != null) {
+    const dedupeKey = `upd:${update.update_id}`
+    if (await env.ML_ORDERS.get(dedupeKey)) return new Response('ok')
+    await env.ML_ORDERS.put(dedupeKey, '1', { expirationTtl: 600 })
+  }
+
   const work = (async () => {
     try {
       const msg = update.message || update.edited_message
@@ -93,11 +100,12 @@ export async function handleTelegramWebhook(request, env, ctx) {
       logErr('Error procesando update:', e.message)
     }
   })()
-  // Antes esto corría en ctx.waitUntil y las respuestas del bot no llegaban
-  // (el 200 cerraba el evento antes de completar el envío a Telegram). Ahora
-  // esperamos a que termine —incluido el sendMessage— antes de responder 200.
-  // Todas las operaciones (comandos, visión, ML) terminan muy por debajo del
-  // timeout de webhook de Telegram (~60s), así que es seguro await-earlas.
+  // Se espera el trabajo antes del 200 (con solo ctx.waitUntil las respuestas
+  // no llegaban), pero ADEMÁS se registra en waitUntil: si Telegram corta la
+  // conexión a los ~60 s (análisis de varios productos), el Worker sigue vivo
+  // hasta terminar y las previews igual salen. El dedupe por update_id de
+  // arriba evita que el reintento de Telegram duplique el proceso.
+  if (ctx?.waitUntil) ctx.waitUntil(work.catch(() => {}))
   await work
 
   return new Response('ok')
@@ -207,12 +215,12 @@ async function handleTextCommand(env, msg) {
   if (text === 'ℹ️ Ayuda' || text === '/start' || text.startsWith('/start@')) return sendStart(env, chatId)
   if (text === '📸 Catalogar') {
     await clearPending(env, chatId)
-    await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
+    await bumpLotGen(env, chatId)
     return tgSend(env, chatId,
       '📸 Mandá las fotos de los productos — pueden ser <b>varios productos ' +
-      'mezclados</b>.\n\n🔀 Al tocar <b>Analizar</b>, la IA agrupa las fotos ' +
-      'por producto y arma un lote por cada uno, con su propio análisis y ' +
-      'publicación por separado.',
+      'mezclados</b>.\n\n🔀 Cuando estén todas, tocá <b>Analizar</b> (una sola ' +
+      'vez): la IA separa los productos y te manda una vista previa de cada ' +
+      'uno para publicarlos por separado.',
       { reply_markup: MAIN_KB })
   }
   if (text === '📦 Despacho') {
@@ -457,9 +465,9 @@ async function handleCallback(env, cq) {
     const [, verdict, target] = data.split(':')
     return approveChat(env, chatId, target, verdict === 'ok')
   }
-  if (data === 'cat:new') {
-    await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
-    return tgSend(env, chatId, '🆕 Listo: las próximas fotos sueltas abren un producto nuevo. (Los álbumes ya son productos aparte solos.)')
+  if (data === 'cat:new') { // botón legado: cierra el lote abierto
+    await bumpLotGen(env, chatId)
+    return tgSend(env, chatId, '🆕 Listo: las próximas fotos arrancan una tanda nueva.')
   }
   if (data.startsWith('cat:go:'))    return runCatalogAnalyze(env, chatId, data.slice(7))
   if (data.startsWith('cat:pub:'))   return runCatalogPublish(env, chatId, data.slice(8))
@@ -983,21 +991,33 @@ async function finalizeEvidence(env, chatId, p) {
 // ── Módulo 3: catalogado y publicación por LOTES (fotos → IA → ML) ───────
 // Reglas fijas: envío SIEMPRE pagado por el comprador, stock SIEMPRE 1.
 //
-// Un LOTE = un producto. Cada álbum de Telegram (media_group_id) abre su
-// propio lote automáticamente; las fotos sueltas se agrupan en el lote
-// "abierto" del chat. Así se pueden mandar fotos de varios productos a la
-// vez y cada uno se analiza y publica por separado, en paralelo.
+// UX: el usuario manda TODAS las fotos (de uno o varios productos, mezcladas,
+// con o sin álbum) → un ÚNICO mensaje de estado con UN botón Analizar → la IA
+// agrupa las fotos por producto físico y manda UNA vista previa por producto,
+// cada uno con su propia publicación.
 //
-// Cada foto se guarda en SU PROPIA clave KV (lotp:<chat>:<lote>:<msgId>,
-// con el file_id en metadata). Nada de leer-modificar-escribir sobre una
-// clave compartida: las fotos de un álbum llegan como updates simultáneos
-// y las escrituras concurrentes se pisaban (así se rompía el flujo viejo).
+// Todas las fotos entrantes caen en el "lote abierto" del chat, cuyo id es
+// determinístico: o<generación>. La generación (lotgen:<chat>) solo cambia
+// cuando el usuario toca Analizar/Descartar/Catalogar — nunca al recibir
+// fotos — así los updates simultáneos de un álbum no compiten por crear el
+// lote. Cada foto se guarda en SU PROPIA clave KV (lotp:<chat>:<lote>:<msgId>,
+// file_id en metadata): nada de leer-modificar-escribir sobre una clave
+// compartida (las escrituras concurrentes se pisaban; así se rompía el flujo viejo).
 const LOT_PHOTO_PFX = (chatId, lotId) => `lotp:${chatId}:${lotId}:`
 const LOT_PHOTO_KEY = (chatId, lotId, msgId) => `${LOT_PHOTO_PFX(chatId, lotId)}${String(msgId).padStart(12, '0')}`
 const LOT_DRAFT_KEY = (chatId, lotId) => `lotd:${chatId}:${lotId}`
 const LOT_MSG_KEY   = (chatId, lotId) => `lotm:${chatId}:${lotId}`
-const SOLO_LOT_KEY  = (chatId) => `lotcur:${chatId}`
+const LOT_GEN_KEY   = (chatId) => `lotgen:${chatId}`
 const LOT_TTL = 7200 // 2 h para armar/revisar/publicar un lote
+
+// Lote abierto actual del chat (donde caen las fotos nuevas).
+async function openLotId(env, chatId) {
+  return `o${(await env.ML_ORDERS.get(LOT_GEN_KEY(chatId))) || '0'}`
+}
+// Cierra el lote abierto: las próximas fotos caen en un lote nuevo.
+async function bumpLotGen(env, chatId) {
+  await env.ML_ORDERS.put(LOT_GEN_KEY(chatId), String(Date.now()))
+}
 
 const lotLabel = (lotId) => `#${String(lotId).slice(-4)}`
 
@@ -1020,40 +1040,31 @@ async function deleteLot(env, chatId, lotId) {
   await Promise.all(res.keys.map(k => env.ML_ORDERS.delete(k.name)))
   await env.ML_ORDERS.delete(LOT_DRAFT_KEY(chatId, lotId))
   await env.ML_ORDERS.delete(LOT_MSG_KEY(chatId, lotId))
-  if ((await env.ML_ORDERS.get(SOLO_LOT_KEY(chatId))) === lotId) {
-    await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
-  }
+  if (lotId === (await openLotId(env, chatId))) await bumpLotGen(env, chatId)
 }
 
 async function catalogCollectPhoto(env, chatId, msg) {
   const photo = msg.photo[msg.photo.length - 1] // mayor resolución
 
-  // Álbum → lote propio (determinístico, sin carreras). Foto suelta → lote
-  // "abierto" del chat (se crea si no hay; "🆕 Otro producto" lo cierra).
-  let lotId
-  if (msg.media_group_id) {
-    lotId = `g${msg.media_group_id}`
-  } else {
-    lotId = await env.ML_ORDERS.get(SOLO_LOT_KEY(chatId))
-    if (!lotId) lotId = `s${msg.message_id}`
-    await env.ML_ORDERS.put(SOLO_LOT_KEY(chatId), lotId, { expirationTtl: 900 })
-  }
+  // TODAS las fotos van al lote abierto del chat (id determinístico o<gen>:
+  // los updates simultáneos de un álbum calculan el mismo lote sin carreras).
+  const lotId = await openLotId(env, chatId)
 
   await env.ML_ORDERS.put(LOT_PHOTO_KEY(chatId, lotId, msg.message_id), '1',
     { metadata: { fid: photo.file_id }, expirationTtl: LOT_TTL })
 
   const n = (await listLotPhotos(env, chatId, lotId)).length
   const text =
-    `📸 <b>Lote ${lotLabel(lotId)}</b>: ${n} foto(s).\n` +
-    'Mandá más fotos o tocá <b>Analizar</b>. Si hay varios productos mezclados, la IA los separa sola. 🔀'
+    `📸 <b>${n} foto(s) recibidas.</b>\n` +
+    'Mandá el resto y, cuando estén todas, tocá <b>Analizar</b>: la IA separa ' +
+    'los productos y te da una vista previa de cada uno. 🔀'
   const kb = { inline_keyboard: [
-    [{ text: `🤖 Analizar lote ${lotLabel(lotId)}`, callback_data: `cat:go:${lotId}` }],
-    [{ text: '🆕 Otro producto', callback_data: 'cat:new' },
-     { text: '🗑 Descartar lote', callback_data: `cat:x:${lotId}` }],
+    [{ text: '🤖 Analizar', callback_data: `cat:go:${lotId}` }],
+    [{ text: '🗑 Descartar fotos', callback_data: `cat:x:${lotId}` }],
   ] }
 
-  // Un solo mensaje de estado por lote: se edita con el conteo actualizado
-  // (las fotos de un álbum llegan en ráfaga; mandar uno por foto era spam).
+  // Un ÚNICO mensaje de estado con UN botón Analizar: se edita con el conteo
+  // actualizado (las fotos llegan en ráfaga; mandar uno por foto era spam).
   const prevMsgId = await env.ML_ORDERS.get(LOT_MSG_KEY(chatId, lotId))
   if (prevMsgId) {
     const r = await tgApi(env, 'editMessageText',
@@ -1068,20 +1079,22 @@ async function catalogCollectPhoto(env, chatId, msg) {
 
 // Divide un lote en sub-lotes según los grupos que detectó la IA.
 // groups: [{label, photos:[índices sobre `entries`]}]. Reusa el sufijo msgId
-// de cada clave original para conservar el orden. Devuelve la lista de
-// sub-lotes creados [{lotId, label, count}].
+// de cada clave original para conservar el orden. Devuelve
+// [{lotId, label, fids, imageIdx}] (imageIdx = índices sobre `entries`).
 async function splitLotIntoGroups(env, chatId, lotId, entries, groups) {
   const subLots = []
   for (let gi = 0; gi < groups.length; gi++) {
     const subId = `${lotId}-${gi + 1}`
+    const fids = []
     for (const idx of groups[gi].photos) {
       const entry = entries[idx]
       if (!entry) continue
       const msgPart = entry.name.split(':').pop()
       await env.ML_ORDERS.put(`${LOT_PHOTO_PFX(chatId, subId)}${msgPart}`, '1',
         { metadata: { fid: entry.fid }, expirationTtl: LOT_TTL })
+      fids.push(entry.fid)
     }
-    subLots.push({ lotId: subId, label: groups[gi].label, count: groups[gi].photos.length })
+    subLots.push({ lotId: subId, label: groups[gi].label, fids, imageIdx: groups[gi].photos })
   }
   // El lote original desaparece (sus fotos ya viven en los sub-lotes). Se
   // borra por prefijo para no dejar claves huérfanas; el ':' final del prefijo
@@ -1095,66 +1108,18 @@ async function splitLotIntoGroups(env, chatId, lotId, entries, groups) {
 // Máximo de fotos que entran a la pasada de agrupación/análisis por invocación
 // (límite de subrequests del Worker y de tamaño del request a la IA).
 const MAX_ANALYZE_PHOTOS = 10
+// Máximo de productos que se analizan de corrido en una invocación; si la IA
+// detecta más, los restantes quedan con botón Analizar (límite de subrequests).
+const MAX_AUTO_ANALYZE = 5
 
-async function runCatalogAnalyze(env, chatId, lotId) {
-  const entries = await listLotPhotos(env, chatId, lotId)
-  if (!entries.length)
-    return tgSend(env, chatId, `El lote ${lotLabel(lotId)} no tiene fotos (o expiró). Mandá las fotos de nuevo.`)
-
-  // Si era el lote "abierto" de fotos sueltas, se cierra: las próximas fotos
-  // sueltas arrancan un producto nuevo mientras este se revisa/publica.
-  if ((await env.ML_ORDERS.get(SOLO_LOT_KEY(chatId))) === lotId) {
-    await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
-  }
-
-  await tgApi(env, 'sendChatAction', { chat_id: chatId, action: 'typing' })
-  await tgSend(env, chatId, `🤖 Analizando el lote ${lotLabel(lotId)} (${entries.length} foto(s)) con IA…`)
-
-  // Se descargan TODAS las fotos (con tope): primero para que la IA decida si
-  // son de un solo producto o de varios, y de paso quedan listas para el análisis.
-  const capped = entries.slice(0, MAX_ANALYZE_PHOTOS)
-  const buffers = await Promise.all(capped.map(e =>
-    tgGetFileBytes(env, e.fid).catch(err => { logErr('descarga foto análisis:', err.message); return null })))
-  const valid = capped.map((e, i) => ({ entry: e, b64: buffers[i] })).filter(x => x.b64)
-  if (!valid.length) return tgSend(env, chatId, '❌ No pude descargar las fotos. Probá de nuevo.')
-
-  // Pasada de agrupación: ¿estas fotos muestran 1 producto o varios?
-  // Si la IA de agrupación falla, se sigue asumiendo un solo producto.
-  let groups = [{ label: null, photos: valid.map((_, i) => i) }]
-  if (valid.length > 1) {
-    try {
-      groups = await clusterPhotos(valid.map(v => v.b64), env.ANTHROPIC_API_KEY)
-    } catch (e) { logErr('clusterPhotos:', e.message) }
-  }
-
-  if (groups.length > 1) {
-    // Varios productos detectados → el lote se divide en sub-lotes; cada uno
-    // se analiza por separado (un toque de Analizar por producto: cada análisis
-    // corre en su propia invocación y no revienta el límite de subrequests).
-    const overflow = entries.slice(MAX_ANALYZE_PHOTOS)
-    const subLots = await splitLotIntoGroups(env, chatId, lotId,
-      valid.map(v => v.entry).concat(overflow),
-      // las fotos que excedieron el tope van al último grupo para no perderlas
-      groups.map((g, gi) => gi === groups.length - 1 && overflow.length
-        ? { ...g, photos: g.photos.concat(overflow.map((_, k) => valid.length + k)) }
-        : g))
-    const lines = subLots.map(s =>
-      `• <b>Lote ${lotLabel(s.lotId)}</b> — ${esc(s.label || 'producto sin etiqueta')} (${s.count} foto(s))`)
-    return tgSend(env, chatId,
-      `🔀 Detecté <b>${subLots.length} productos distintos</b> en el lote ${lotLabel(lotId)}:\n\n` +
-      lines.join('\n') +
-      '\n\nTocá <b>Analizar</b> en cada uno: cada producto sale como publicación separada.',
-      { reply_markup: { inline_keyboard: subLots.map(s =>
-        [{ text: `🤖 Analizar ${lotLabel(s.lotId)} · ${(s.label || 'producto').slice(0, 24)}`, callback_data: `cat:go:${s.lotId}` }]) } })
-  }
-
-  // Un solo producto → análisis normal (hasta 3 fotos, ya descargadas).
-  const imagesB64 = valid.slice(0, 3).map(v => v.b64)
-  const photos = entries.map(e => e.fid)
-
+// Análisis + vista previa de UN producto: IA de catalogado → categoría →
+// atributos+mercado → draft en KV → preview. `lite` omite la ganancia
+// estimada para ahorrar subrequests cuando se analizan varios de corrido
+// (cualquier edición posterior re-renderiza la preview completa).
+async function analyzeAndPreviewLot(env, chatId, lotId, photoFids, imagesB64, lite = false) {
   let analysis
   try {
-    analysis = await analyzeProduct(imagesB64, env.ANTHROPIC_API_KEY)
+    analysis = await analyzeProduct(imagesB64.slice(0, 3), env.ANTHROPIC_API_KEY)
   } catch (e) {
     return tgSend(env, chatId, `❌ Error de IA en el lote ${lotLabel(lotId)}: ${esc(e.message)}`)
   }
@@ -1164,10 +1129,10 @@ async function runCatalogAnalyze(env, chatId, lotId) {
   if (!best) {
     return tgSend(env, chatId,
       `⚠️ No encontré una categoría de ML para "${esc(analysis.product)}" (lote ${lotLabel(lotId)}). ` +
-      'Agregá una foto más clara al lote y volvé a Analizar.',
+      'Agregá una foto más clara y volvé a Analizar.',
       { reply_markup: { inline_keyboard: [[
-        { text: `🤖 Reanalizar`, callback_data: `cat:go:${lotId}` },
-        { text: '🗑 Descartar lote', callback_data: `cat:x:${lotId}` },
+        { text: '🤖 Reanalizar', callback_data: `cat:go:${lotId}` },
+        { text: '🗑 Descartar', callback_data: `cat:x:${lotId}` },
       ]] } })
   }
 
@@ -1198,21 +1163,101 @@ async function runCatalogAnalyze(env, chatId, lotId) {
     categoryId:   best.id,
     categoryName: best.name,
     attrValues,
-    photos,
+    photos:       photoFids,
     market,
     qty:          1,
   }
   await setLotDraft(env, chatId, lotId, { draft, cats })
-  return sendCatalogPreview(env, chatId, lotId, draft)
+  return sendCatalogPreview(env, chatId, lotId, draft, lite)
 }
 
-async function sendCatalogPreview(env, chatId, lotId, draft) {
+async function runCatalogAnalyze(env, chatId, lotId) {
+  const entries = await listLotPhotos(env, chatId, lotId)
+  if (!entries.length)
+    return tgSend(env, chatId, 'No hay fotos para analizar (o expiraron). Mandá las fotos de nuevo.')
+
+  // Si era el lote abierto, se cierra: las próximas fotos abren uno nuevo
+  // mientras estos productos se revisan/publican.
+  if (lotId === (await openLotId(env, chatId))) await bumpLotGen(env, chatId)
+
+  await tgApi(env, 'sendChatAction', { chat_id: chatId, action: 'typing' })
+  await tgSend(env, chatId, `🤖 Analizando ${entries.length} foto(s) con IA…`)
+
+  // Se descargan TODAS las fotos (con tope): primero para que la IA decida si
+  // son de un solo producto o de varios, y de paso quedan listas para el análisis.
+  const capped = entries.slice(0, MAX_ANALYZE_PHOTOS)
+  const buffers = await Promise.all(capped.map(e =>
+    tgGetFileBytes(env, e.fid).catch(err => { logErr('descarga foto análisis:', err.message); return null })))
+  const valid = capped.map((e, i) => ({ entry: e, b64: buffers[i] })).filter(x => x.b64)
+  if (!valid.length) return tgSend(env, chatId, '❌ No pude descargar las fotos. Probá de nuevo.')
+
+  // Pasada de agrupación: ¿estas fotos muestran 1 producto o varios?
+  // Si la IA de agrupación falla, se sigue asumiendo un solo producto.
+  let groups = [{ label: null, photos: valid.map((_, i) => i) }]
+  if (valid.length > 1) {
+    try {
+      groups = await clusterPhotos(valid.map(v => v.b64), env.ANTHROPIC_API_KEY)
+    } catch (e) { logErr('clusterPhotos:', e.message) }
+  }
+
+  // Un solo producto → análisis directo (las fotos ya están descargadas).
+  if (groups.length <= 1) {
+    return analyzeAndPreviewLot(env, chatId, lotId,
+      entries.map(e => e.fid), valid.slice(0, 3).map(v => v.b64))
+  }
+
+  // Varios productos → dividir en sub-lotes y analizarlos TODOS de corrido:
+  // el usuario recibe una vista previa individual por producto, sin toques
+  // intermedios. Los b64 ya descargados se reutilizan (sin re-descargas).
+  const overflow = entries.slice(MAX_ANALYZE_PHOTOS)
+  const allEntries = valid.map(v => v.entry).concat(overflow)
+  const subLots = await splitLotIntoGroups(env, chatId, lotId, allEntries,
+    // las fotos que excedieron el tope van al último grupo para no perderlas
+    groups.map((g, gi) => gi === groups.length - 1 && overflow.length
+      ? { ...g, photos: g.photos.concat(overflow.map((_, k) => valid.length + k)) }
+      : g))
+
+  const resumen = subLots.map((s, i) =>
+    `${i + 1}. ${esc(s.label || 'producto')} (${s.fids.length} foto(s))`)
+  await tgSend(env, chatId,
+    `🔀 Detecté <b>${subLots.length} productos distintos</b>:\n${resumen.join('\n')}\n\n` +
+    '⏳ Analizando cada uno… te va llegando una vista previa por producto.')
+
+  const auto = subLots.slice(0, MAX_AUTO_ANALYZE)
+  for (const s of auto) {
+    // Imágenes del grupo ya descargadas (índices < valid.length).
+    let imgs = s.imageIdx.filter(i => i < valid.length).slice(0, 3).map(i => valid[i].b64)
+    if (!imgs.length && s.fids.length) {
+      // Grupo formado solo por fotos de desborde: descargar hasta 3.
+      const bufs = await Promise.all(s.fids.slice(0, 3).map(fid =>
+        tgGetFileBytes(env, fid).catch(() => null)))
+      imgs = bufs.filter(Boolean)
+    }
+    if (!imgs.length) continue
+    await analyzeAndPreviewLot(env, chatId, s.lotId, s.fids, imgs, true)
+  }
+
+  // Si hubo más productos que el tope por invocación, los restantes quedan
+  // listos con su botón (caso raro: >5 productos en una tanda).
+  const rest = subLots.slice(MAX_AUTO_ANALYZE)
+  if (rest.length) {
+    await tgSend(env, chatId,
+      `➕ Quedan ${rest.length} producto(s) por analizar (tope por tanda). Tocá cada botón:`,
+      { reply_markup: { inline_keyboard: rest.map(s =>
+        [{ text: `🤖 Analizar · ${(s.label || 'producto').slice(0, 28)}`, callback_data: `cat:go:${s.lotId}` }]) } })
+  }
+}
+
+async function sendCatalogPreview(env, chatId, lotId, draft, lite = false) {
   const m = draft.market
 
   // Ganancia estimada: comisión real de ML + costo de envío si lo paga el
-  // vendedor. Si algo falla, la preview sale igual sin esa línea.
+  // vendedor. Si algo falla, la preview sale igual sin esa línea. En modo
+  // lite (análisis de varios productos de corrido) se omite para no agotar
+  // los subrequests; reaparece al editar cualquier cosa del borrador.
   let profitLine = null
   try {
+    if (lite) throw new Error('lite')
     const token = await getValidAccessToken(env)
     const est = await estimateProfit(token, draft)
     if (est.fee != null) {
@@ -1220,7 +1265,7 @@ async function sendCatalogPreview(env, chatId, lotId, draft) {
       if (draft.freeShipping) parts.push(`envío ~${fmtMoney(est.ship || 0, 'CLP')}`)
       profitLine = `💰 <b>Ganancia estimada: ${fmtMoney(est.net, 'CLP')}</b> <i>(${parts.join(' − ')}, ${est.listingType === 'free' ? 'publicación gratuita' : 'Clásica/paga'})</i>`
     }
-  } catch (e) { logErr('estimateProfit:', e.message) }
+  } catch (e) { if (e.message !== 'lite') logErr('estimateProfit:', e.message) }
 
   const lines = [
     `📋 <b>Vista previa — lote ${lotLabel(lotId)}</b>`,
