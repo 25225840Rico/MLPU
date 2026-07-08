@@ -1057,6 +1057,8 @@ async function deleteLot(env, chatId, lotId) {
   if (lotId === (await openLotId(env, chatId))) await bumpLotGen(env, chatId)
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
 async function catalogCollectPhoto(env, chatId, msg) {
   const photo = msg.photo[msg.photo.length - 1] // mayor resolución
 
@@ -1066,6 +1068,17 @@ async function catalogCollectPhoto(env, chatId, msg) {
 
   await env.ML_ORDERS.put(LOT_PHOTO_KEY(chatId, lotId, msg.message_id), '1',
     { metadata: { fid: photo.file_id }, expirationTtl: LOT_TTL })
+
+  // Las fotos de una tanda llegan como updates SIMULTÁNEOS: si cada uno
+  // manda su mensaje de estado salen N mensajes "1 foto recibida" (visto en
+  // la prueba real del 2026-07-08). Debounce con claim: cada invocación
+  // reclama el turno con su message_id, espera a que la ráfaga se asiente y
+  // solo la que sigue siendo la última publica/edita el mensaje de estado
+  // (KV es last-write-wins ⇒ gana exactamente una).
+  const claimKey = `lotclaim:${chatId}:${lotId}`
+  await env.ML_ORDERS.put(claimKey, String(msg.message_id), { expirationTtl: 300 })
+  await sleep(2500)
+  if ((await env.ML_ORDERS.get(claimKey)) !== String(msg.message_id)) return
 
   const n = (await listLotPhotos(env, chatId, lotId)).length
   const text =
@@ -1078,7 +1091,7 @@ async function catalogCollectPhoto(env, chatId, msg) {
   ] }
 
   // Un ÚNICO mensaje de estado con UN botón Analizar: se edita con el conteo
-  // actualizado (las fotos llegan en ráfaga; mandar uno por foto era spam).
+  // actualizado.
   const prevMsgId = await env.ML_ORDERS.get(LOT_MSG_KEY(chatId, lotId))
   if (prevMsgId) {
     const r = await tgApi(env, 'editMessageText',
