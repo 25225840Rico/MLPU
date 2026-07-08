@@ -80,6 +80,44 @@ async function ask(agentName, system, imageB64, apiKey) {
   return JSON.parse(match[0])
 }
 
+// ── Agrupador: separa un montón de fotos por producto FÍSICO ──
+// El vendedor manda fotos mezcladas de varios productos (p.ej. autos de
+// colección distintos); una pasada de visión decide qué fotos son del mismo
+// objeto. Devuelve [{label, photos:[índices 0-based]}]; toda foto queda en
+// exactamente un grupo (las que la IA no asigne van como grupo propio).
+export async function clusterPhotos(imagesB64, apiKey) {
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY no configurada en el Worker.')
+  const n = imagesB64.length
+  if (n <= 1) return [{ label: null, photos: imagesB64.map((_, i) => i) }]
+
+  const a = await ask('Agrupador',
+    `Vas a recibir ${n} fotos EN ORDEN: la primera imagen es la foto 1, la segunda la foto 2, …, la última la foto ${n}. Son fotos de un vendedor y pueden mostrar UN solo producto (varios ángulos) o VARIOS productos DISTINTOS (p.ej. autos de colección diferentes).
+
+Tu única tarea: agrupar las fotos por producto FÍSICO.
+- Mismo objeto exacto (mismo modelo, mismo color, mismo empaque) visto desde distintos ángulos/fondos = MISMO grupo.
+- Productos del mismo tipo pero distinto modelo, color, marca o empaque = grupos DISTINTOS. Mira los detalles: forma de la carrocería, color, ruedas, gráficas, texto del empaque.
+- Cada foto va en EXACTAMENTE un grupo. No inventes fotos ni omitas ninguna.
+
+Responde SOLO JSON:
+{"groups":[{"label":"descripción corta del producto (ej: auto rojo tipo Camaro)","photos":[1,3]},{"label":"...","photos":[2]}]}`,
+    imagesB64, apiKey)
+
+  const seen = new Set()
+  const groups = []
+  for (const g of (a.groups || [])) {
+    const photos = (Array.isArray(g.photos) ? g.photos : [])
+      .map(x => Math.round(Number(x)) - 1)
+      .filter(i => i >= 0 && i < n && !seen.has(i))
+    photos.forEach(i => seen.add(i))
+    if (photos.length) groups.push({ label: String(g.label || '').slice(0, 40) || null, photos })
+  }
+  // Fotos que la IA no asignó: cada una como producto propio (mejor que perderlas).
+  for (let i = 0; i < n; i++) {
+    if (!seen.has(i)) groups.push({ label: null, photos: [i] })
+  }
+  return groups.slice(0, 8)
+}
+
 // ── Análisis del producto (UN agente detallado, hasta 3 fotos) ─
 // Antes eran 4 llamadas en paralelo que subían la misma imagen 4 veces; una
 // sola llamada con todas las fotos es más rápida, más barata y más coherente

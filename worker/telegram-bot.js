@@ -19,7 +19,7 @@ import {
 import { sendMessageToBuyer, getConversation, TEMPLATES, TEMPLATE_LABELS } from './ml-messaging.js'
 import { exchangeAuthCode, buildAuthUrl, getValidAccessToken } from './index.js'
 import {
-  analyzeProduct, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
+  analyzeProduct, clusterPhotos, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
   getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
 
@@ -209,11 +209,10 @@ async function handleTextCommand(env, msg) {
     await clearPending(env, chatId)
     await env.ML_ORDERS.delete(SOLO_LOT_KEY(chatId))
     return tgSend(env, chatId,
-      '📸 Mandá las fotos de los productos.\n\n' +
-      '🧺 <b>Podés catalogar varios a la vez</b>: mandá cada producto como un ' +
-      '<b>álbum</b> (seleccioná sus fotos juntas) y cada álbum se convierte en ' +
-      'un lote con su propio análisis y publicación. Las fotos sueltas se ' +
-      'juntan en un solo lote hasta que toques <b>Analizar</b> u <b>🆕 Otro producto</b>.',
+      '📸 Mandá las fotos de los productos — pueden ser <b>varios productos ' +
+      'mezclados</b>.\n\n🔀 Al tocar <b>Analizar</b>, la IA agrupa las fotos ' +
+      'por producto y arma un lote por cada uno, con su propio análisis y ' +
+      'publicación por separado.',
       { reply_markup: MAIN_KB })
   }
   if (text === '📦 Despacho') {
@@ -288,8 +287,8 @@ async function sendStart(env, chatId) {
     '📸 <b>Catalogar</b> (lo principal): mandá fotos, tocá <b>Analizar</b> y ' +
     'la IA arma título, precio, categoría y descripción. Revisás, ajustás con ' +
     'los botones y <b>Publicar</b>. Envío a cargo del comprador y stock 1 por defecto.\n' +
-    '🧺 <b>Por lotes</b>: mandá varios productos a la vez, cada uno como un ' +
-    'álbum de fotos — cada álbum se analiza y publica por separado.\n\n' +
+    '🔀 <b>Por lotes</b>: mandá fotos de varios productos mezclados; la IA ' +
+    'las agrupa por producto y cada uno se analiza y publica por separado.\n\n' +
     '📦 Despacho — foto del sticker para asignar tracking.\n' +
     '🧾 Órdenes · 📋 Historial — ventas reales de ML.\n' +
     '💬 Mensajes — directo, conversación y plantillas.\n\n' +
@@ -1002,11 +1001,11 @@ const LOT_TTL = 7200 // 2 h para armar/revisar/publicar un lote
 
 const lotLabel = (lotId) => `#${String(lotId).slice(-4)}`
 
-// file_ids del lote, en el orden en que llegaron (message_id ascendente:
-// las claves KV se listan en orden lexicográfico y el msgId va con padding).
+// Fotos del lote como [{name, fid}], en el orden en que llegaron (message_id
+// ascendente: las claves KV se listan en orden lexicográfico, msgId con padding).
 async function listLotPhotos(env, chatId, lotId) {
   const res = await env.ML_ORDERS.list({ prefix: LOT_PHOTO_PFX(chatId, lotId), limit: 100 })
-  return res.keys.map(k => k.metadata?.fid).filter(Boolean)
+  return res.keys.filter(k => k.metadata?.fid).map(k => ({ name: k.name, fid: k.metadata.fid }))
 }
 
 async function getLotDraft(env, chatId, lotId) {
@@ -1046,7 +1045,7 @@ async function catalogCollectPhoto(env, chatId, msg) {
   const n = (await listLotPhotos(env, chatId, lotId)).length
   const text =
     `📸 <b>Lote ${lotLabel(lotId)}</b>: ${n} foto(s).\n` +
-    'Cada álbum es un producto aparte. Mandá más fotos o tocá <b>Analizar</b>.'
+    'Mandá más fotos o tocá <b>Analizar</b>. Si hay varios productos mezclados, la IA los separa sola. 🔀'
   const kb = { inline_keyboard: [
     [{ text: `🤖 Analizar lote ${lotLabel(lotId)}`, callback_data: `cat:go:${lotId}` }],
     [{ text: '🆕 Otro producto', callback_data: 'cat:new' },
@@ -1067,9 +1066,39 @@ async function catalogCollectPhoto(env, chatId, msg) {
   }
 }
 
+// Divide un lote en sub-lotes según los grupos que detectó la IA.
+// groups: [{label, photos:[índices sobre `entries`]}]. Reusa el sufijo msgId
+// de cada clave original para conservar el orden. Devuelve la lista de
+// sub-lotes creados [{lotId, label, count}].
+async function splitLotIntoGroups(env, chatId, lotId, entries, groups) {
+  const subLots = []
+  for (let gi = 0; gi < groups.length; gi++) {
+    const subId = `${lotId}-${gi + 1}`
+    for (const idx of groups[gi].photos) {
+      const entry = entries[idx]
+      if (!entry) continue
+      const msgPart = entry.name.split(':').pop()
+      await env.ML_ORDERS.put(`${LOT_PHOTO_PFX(chatId, subId)}${msgPart}`, '1',
+        { metadata: { fid: entry.fid }, expirationTtl: LOT_TTL })
+    }
+    subLots.push({ lotId: subId, label: groups[gi].label, count: groups[gi].photos.length })
+  }
+  // El lote original desaparece (sus fotos ya viven en los sub-lotes). Se
+  // borra por prefijo para no dejar claves huérfanas; el ':' final del prefijo
+  // no matchea los sub-lotes (usan '<lotId>-N:').
+  const res = await env.ML_ORDERS.list({ prefix: LOT_PHOTO_PFX(chatId, lotId), limit: 100 })
+  await Promise.all(res.keys.map(k => env.ML_ORDERS.delete(k.name)))
+  await env.ML_ORDERS.delete(LOT_MSG_KEY(chatId, lotId))
+  return subLots
+}
+
+// Máximo de fotos que entran a la pasada de agrupación/análisis por invocación
+// (límite de subrequests del Worker y de tamaño del request a la IA).
+const MAX_ANALYZE_PHOTOS = 10
+
 async function runCatalogAnalyze(env, chatId, lotId) {
-  const photos = await listLotPhotos(env, chatId, lotId)
-  if (!photos.length)
+  const entries = await listLotPhotos(env, chatId, lotId)
+  if (!entries.length)
     return tgSend(env, chatId, `El lote ${lotLabel(lotId)} no tiene fotos (o expiró). Mandá las fotos de nuevo.`)
 
   // Si era el lote "abierto" de fotos sueltas, se cierra: las próximas fotos
@@ -1079,14 +1108,49 @@ async function runCatalogAnalyze(env, chatId, lotId) {
   }
 
   await tgApi(env, 'sendChatAction', { chat_id: chatId, action: 'typing' })
-  await tgSend(env, chatId, `🤖 Analizando el lote ${lotLabel(lotId)} (${photos.length} foto(s)) con IA…`)
+  await tgSend(env, chatId, `🤖 Analizando el lote ${lotLabel(lotId)} (${entries.length} foto(s)) con IA…`)
 
-  // Hasta 3 fotos al análisis (más contexto = marca/modelo/specs más fiables),
-  // descargadas en paralelo. Si alguna falla se sigue con las que haya.
-  const buffers = await Promise.all(photos.slice(0, 3).map(id =>
-    tgGetFileBytes(env, id).catch(e => { logErr('descarga foto análisis:', e.message); return null })))
-  const imagesB64 = buffers.filter(Boolean)
-  if (!imagesB64.length) return tgSend(env, chatId, '❌ No pude descargar las fotos. Probá de nuevo.')
+  // Se descargan TODAS las fotos (con tope): primero para que la IA decida si
+  // son de un solo producto o de varios, y de paso quedan listas para el análisis.
+  const capped = entries.slice(0, MAX_ANALYZE_PHOTOS)
+  const buffers = await Promise.all(capped.map(e =>
+    tgGetFileBytes(env, e.fid).catch(err => { logErr('descarga foto análisis:', err.message); return null })))
+  const valid = capped.map((e, i) => ({ entry: e, b64: buffers[i] })).filter(x => x.b64)
+  if (!valid.length) return tgSend(env, chatId, '❌ No pude descargar las fotos. Probá de nuevo.')
+
+  // Pasada de agrupación: ¿estas fotos muestran 1 producto o varios?
+  // Si la IA de agrupación falla, se sigue asumiendo un solo producto.
+  let groups = [{ label: null, photos: valid.map((_, i) => i) }]
+  if (valid.length > 1) {
+    try {
+      groups = await clusterPhotos(valid.map(v => v.b64), env.ANTHROPIC_API_KEY)
+    } catch (e) { logErr('clusterPhotos:', e.message) }
+  }
+
+  if (groups.length > 1) {
+    // Varios productos detectados → el lote se divide en sub-lotes; cada uno
+    // se analiza por separado (un toque de Analizar por producto: cada análisis
+    // corre en su propia invocación y no revienta el límite de subrequests).
+    const overflow = entries.slice(MAX_ANALYZE_PHOTOS)
+    const subLots = await splitLotIntoGroups(env, chatId, lotId,
+      valid.map(v => v.entry).concat(overflow),
+      // las fotos que excedieron el tope van al último grupo para no perderlas
+      groups.map((g, gi) => gi === groups.length - 1 && overflow.length
+        ? { ...g, photos: g.photos.concat(overflow.map((_, k) => valid.length + k)) }
+        : g))
+    const lines = subLots.map(s =>
+      `• <b>Lote ${lotLabel(s.lotId)}</b> — ${esc(s.label || 'producto sin etiqueta')} (${s.count} foto(s))`)
+    return tgSend(env, chatId,
+      `🔀 Detecté <b>${subLots.length} productos distintos</b> en el lote ${lotLabel(lotId)}:\n\n` +
+      lines.join('\n') +
+      '\n\nTocá <b>Analizar</b> en cada uno: cada producto sale como publicación separada.',
+      { reply_markup: { inline_keyboard: subLots.map(s =>
+        [{ text: `🤖 Analizar ${lotLabel(s.lotId)} · ${(s.label || 'producto').slice(0, 24)}`, callback_data: `cat:go:${s.lotId}` }]) } })
+  }
+
+  // Un solo producto → análisis normal (hasta 3 fotos, ya descargadas).
+  const imagesB64 = valid.slice(0, 3).map(v => v.b64)
+  const photos = entries.map(e => e.fid)
 
   let analysis
   try {
