@@ -1118,13 +1118,20 @@ async function splitLotIntoGroups(env, chatId, lotId, entries, groups) {
 // (límite de subrequests del Worker y de tamaño del request a la IA).
 const MAX_ANALYZE_PHOTOS = 10
 // Máximo de productos que se analizan de corrido en una invocación; si la IA
-// detecta más, los restantes quedan con botón Analizar (límite de subrequests).
-const MAX_AUTO_ANALYZE = 5
+// detecta más, los restantes quedan con botón Analizar. Con el modo lite
+// (3 llamadas por producto) 8 productos + 10 fotos caben en el presupuesto
+// de ~50 llamadas externas por invocación.
+const MAX_AUTO_ANALYZE = 8
 
 // Análisis + vista previa de UN producto: IA de catalogado → categoría →
-// atributos+mercado → draft en KV → preview. `lite` omite la ganancia
-// estimada para ahorrar subrequests cuando se analizan varios de corrido
-// (cualquier edición posterior re-renderiza la preview completa).
+// atributos+mercado → draft en KV → preview.
+//
+// `lite` (tanda de varios productos): cada invocación del Worker tiene un
+// presupuesto de ~50 llamadas externas y con 7 productos el flujo completo
+// lo reventaba (prueba real 2026-07-08: solo salieron 4 de 7 previews).
+// En lite se recorta a 3 llamadas por producto: análisis IA + 1 búsqueda de
+// categoría + preview. Atributos se completan al Publicar (invocación
+// nueva con presupuesto propio) y precio de mercado/ganancia al editar.
 async function analyzeAndPreviewLot(env, chatId, lotId, photoFids, imagesB64, lite = false) {
   let analysis
   try {
@@ -1133,7 +1140,7 @@ async function analyzeAndPreviewLot(env, chatId, lotId, photoFids, imagesB64, li
     return tgSend(env, chatId, `❌ Error de IA en el lote ${lotLabel(lotId)}: ${esc(e.message)}`)
   }
 
-  const cats = await discoverCategories(analysis.categorySearches)
+  const cats = await discoverCategories(lite ? analysis.categorySearches.slice(0, 1) : analysis.categorySearches)
   const best = cats.find(c => c.id) || null
   if (!best) {
     return tgSend(env, chatId,
@@ -1145,8 +1152,9 @@ async function analyzeAndPreviewLot(env, chatId, lotId, photoFids, imagesB64, li
       ]] } })
   }
 
-  // Atributos (ML + IA) y precios de mercado en paralelo: no dependen entre sí.
-  const [attrValues, market] = await Promise.all([
+  // Atributos (ML + IA) y precios de mercado en paralelo: no dependen entre
+  // sí. En lite se omiten (atributos → al Publicar; mercado → al editar).
+  const [attrValues, market] = lite ? [{}, null] : await Promise.all([
     getRequiredAttrs(best.id)
       .then(required => fillAttributesWithAI(required, analysis, env.ANTHROPIC_API_KEY,
         { title: analysis.title, description: analysis.description, categoryName: best.name }))
@@ -1332,6 +1340,17 @@ async function runCatalogPublish(env, chatId, lotId) {
     token = await getValidAccessToken(env)
   } catch (e) {
     return tgSend(env, chatId, `❌ Sin conexión con ML: ${esc(e.message)}`)
+  }
+
+  // Los borradores de tanda (lite) salen sin atributos para no agotar el
+  // presupuesto de llamadas: se completan acá, con presupuesto propio.
+  if (!Object.keys(d.attrValues || {}).length) {
+    try {
+      const required = await getRequiredAttrs(d.categoryId)
+      d.attrValues = await fillAttributesWithAI(required, d, env.ANTHROPIC_API_KEY,
+        { title: d.title, description: d.description, categoryName: d.categoryName })
+      await setLotDraft(env, chatId, lotId, p)
+    } catch (e) { logErr('attrs al publicar:', e.message) }
   }
 
   // Descarga de Telegram + subida a ML de todas las fotos en paralelo,
