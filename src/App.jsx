@@ -461,7 +461,7 @@ export default function App() {
   const [editDesc,       setEditDesc]       = useState('')
   const [editCondition,  setEditCondition]  = useState('used')
   const [editQty,        setEditQty]        = useState(3)
-  const [listingType,    setListingType]    = useState('free')
+  const [listingType,    setListingType]    = useState('gold_pro')
   const [requiredAttrs,  setRequiredAttrs]  = useState([])
   const [attrValues,     setAttrValues]     = useState({})
   const [loadingAttrs,   setLoadingAttrs]   = useState(false)
@@ -725,7 +725,7 @@ export default function App() {
           analysis: a, selCat: bestCat,
           editTitle: a.title || '', editPrice: a.price || 0,
           editDesc: a.description || '', editCondition: a.condition || 'used',
-          editQty: 3, listingType: 'free',
+          editQty: 3, listingType: 'gold_pro',
           attrValues: {}, requiredAttrs: [],
           freeShipping: false, localPickup: false,
           shippingCost: 3000, productCost: 0
@@ -972,7 +972,7 @@ export default function App() {
     setEditDesc(draft.editDesc || '')
     setEditCondition(draft.editCondition || 'used')
     setEditQty(draft.editQty || 1)
-    setListingType(draft.listingType || 'free')
+    setListingType(draft.listingType || 'gold_pro')
     setAttrValues(draft.attrValues || {})
     setRequiredAttrs(draft.requiredAttrs || [])
     setFreeShipping(draft.freeShipping || false)
@@ -1027,7 +1027,7 @@ export default function App() {
           available_quantity: draft.editQty || 1,
           buying_mode: 'buy_it_now',
           condition: draft.editCondition || 'used',
-          listing_type_id: draft.listingType || 'free',
+          listing_type_id: draft.listingType || 'gold_pro',
           ...(pictures.length && { pictures }),
           ...(attributes.length && { attributes }),
           shipping: draft.freeShipping

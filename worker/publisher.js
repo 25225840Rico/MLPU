@@ -287,8 +287,8 @@ export async function uploadPicture(token, arrayBuffer) {
 
 // ── Crear la publicación ──────────────────────────────────────
 // draft: { title, price, description, condition, categoryId, attrValues, pictureIds }
-// El tipo "free" no existe en todas las categorías (p.ej. MLC3398 solo ofrece
-// gold_*). Se consulta lo disponible y se elige lo más barato: free → Clásica.
+// Se consulta lo disponible y se elige la MÁXIMA exposición: Premium →
+// Clásica → gratuita (decisión 2026-07-10: todo sale en la mejor categoría).
 async function pickListingType(token, categoryId) {
   try {
     // El user id viene embebido al final del token: APP_USR-<app>-<...>-<user_id>
@@ -299,18 +299,17 @@ async function pickListingType(token, categoryId) {
     })
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     const ids = ((await r.json()).available || []).map(t => t.id)
-    for (const pref of ['free', 'gold_special', 'gold_pro']) {
+    for (const pref of ['gold_pro', 'gold_special', 'free']) {
       if (ids.includes(pref)) return pref
     }
     if (ids.length) return ids[0]
   } catch (e) { log('available_listing_types falló:', e.message) }
-  return 'free'
+  return 'gold_pro'
 }
 
-// ── Estimación de comisión, envío y ganancia ──────────────────
-// fee: comisión de venta real (listing_prices). ship: lo que pagaría el
-// vendedor por envío gratis, estimado con un paquete genérico de 10x10x10 cm /
-// 500 g (ML exige dimensiones y el ítem aún no existe). net = precio − ambos.
+// ── Estimación de comisión y ganancia ─────────────────────────
+// fee: comisión de venta real (listing_prices). El envío lo paga SIEMPRE el
+// comprador, así que no descuenta nada al vendedor. net = precio − comisión.
 export async function estimateProfit(token, draft) {
   const price = Number(draft.price) || 0
   const listingType = await pickListingType(token, draft.categoryId)
@@ -323,19 +322,7 @@ export async function estimateProfit(token, draft) {
     if (r.ok) fee = (await r.json()).sale_fee_amount ?? null
   } catch (e) { log('listing_prices falló:', e.message) }
 
-  let ship = null
-  if (draft.freeShipping) {
-    try {
-      const userId = token.split('-').pop()
-      const r = await mlFetch(
-        `${ML}/users/${userId}/shipping_options/free?item_price=${price}&listing_type_id=${listingType}` +
-        `&mode=me2&condition=${draft.condition || 'used'}&verbose=true&category_id=${draft.categoryId}&dimensions=10x10x10,500`,
-        { headers: { Authorization: `Bearer ${token}` } })
-      if (r.ok) ship = (await r.json()).coverage?.all_country?.list_cost ?? null
-    } catch (e) { log('shipping_options falló:', e.message) }
-  }
-
-  return { listingType, fee, ship, net: price - (fee || 0) - (ship || 0) }
+  return { listingType, fee, net: price - (fee || 0) }
 }
 
 export async function createListing(token, draft) {
@@ -357,9 +344,8 @@ export async function createListing(token, draft) {
     listing_type_id:    listingType,
     ...(draft.pictureIds?.length && { pictures: draft.pictureIds.map(id => ({ id })) }),
     ...(attributes.length && { attributes }),
-    // Envío: a cargo del comprador por defecto; el operador puede alternar a
-    // "gratis" (lo paga el vendedor) desde la vista previa (draft.freeShipping).
-    shipping: { mode: 'me2', free_shipping: !!draft.freeShipping, local_pick_up: false },
+    // Envío: SIEMPRE a cargo del comprador (regla fija, sin toggle).
+    shipping: { mode: 'me2', free_shipping: false, local_pick_up: false },
     // Sin sale_terms de garantía (decisión 2026-07-03: se quitó la de 30 días).
   }
 
