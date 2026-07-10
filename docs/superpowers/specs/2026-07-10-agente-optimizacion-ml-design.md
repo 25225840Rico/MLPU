@@ -1,6 +1,6 @@
 # Agente autónomo de optimización MercadoLibre (MLPU-Optimizer)
 
-**Fecha:** 2026-07-10 · **Estado:** aprobado por el usuario (brainstorming completo)
+**Fecha:** 2026-07-10 · **Estado:** v1.0 — aprobado, listo para implementación
 **Proyecto base:** MLPU (`C:\Users\aronr\OneDrive\Documentos\PROYECTOS\automl`)
 
 ## 1. Objetivo
@@ -290,3 +290,54 @@ Multi-cuenta/multi-país (ya soportado por el esquema), posición en
 búsqueda (`search_position_history`), costos reales por ítem para margen
 verdadero, Workers Paid + Queues a gran escala, panel web de solo lectura
 sobre D1 si Telegram queda chico.
+
+## Apéndice A — Definition of Done por fase
+
+**F0:**
+- OAuth funcionando (token fresco obtenido vía el flujo existente).
+- Credenciales y permisos de la cuenta validados contra la API.
+- Límites de plataforma verificados y persistidos como configuración.
+- Health check en verde y consultable por Telegram (`/estado`).
+- Cron operativo (job de prueba completo en `jobs`).
+- D1 inicializada con migraciones reproducibles (SQL versionado en repo).
+- Catálogo completo en `listings`.
+- Secretos documentados (nombres y propósito, nunca valores) en el repo.
+
+**F1:**
+- 100% del catálogo sincronizado a diario.
+- `listing_snapshots` y `competitor_snapshots` generándose correctamente.
+- KPIs visibles en el digest de Telegram.
+- Optimization Coverage > 95% y Average Analysis Age < 24 h sostenidos.
+- **Cero escrituras hacia MercadoLibre** (verificable en `events`).
+- Recuperación automática tras interrupciones (batch fallido se reintenta
+  sin intervención; ciclo incompleto continúa la noche siguiente).
+- Auditoría completa en `events`.
+
+(F2-F4 definirán su DoD en sus respectivos planes de implementación,
+siguiendo este mismo formato.)
+
+## Apéndice B — Riesgos
+
+| Riesgo | Impacto | Mitigación |
+|---|---|---|
+| Cambios en la API de ML | Alto | F0 verifica capacidades; Normalizer aísla el modelo interno; circuit breaker |
+| Cambios en límites de Cloudflare | Medio | Límites como configuración dinámica + degradación ordenada |
+| Caída/timeout del Worker a mitad de ciclo | Medio | Estado Job→Batch→Item: reintento solo del batch fallido |
+| OAuth expirado o rotado | Alto | Renovación automática existente; health check de F0 lo detecta |
+| D1 temporalmente indisponible | Bajo | Reintentos exponenciales; el ciclo se completa la noche siguiente |
+| ML acepta un cambio y lo revierte en silencio | Alto | Verificación por relectura post-PUT (regla ya probada en producción) |
+| Cambio manual del operador pisado por el agente | Medio | `manual_override` congela el ítem 7 días |
+
+## Apéndice C — Criterios para habilitar F2 (salir de DRY_RUN)
+
+F2 no se habilita por plazo, sino por estabilidad demostrada. Todos:
+- 7-14 días de histórico consistente (sin huecos de snapshots).
+- Optimization Coverage ≥ 95% sostenido.
+- Errores del Collector < 1%.
+- Errores del Applier en DRY_RUN < 1%.
+- Ningún rollback inesperado en las simulaciones.
+- Validación manual del usuario de varias propuestas representativas
+  (las simuladas coinciden con su juicio de negocio).
+
+La transición posterior a `APPROVAL_MODE=auto` (solo tipos de cambio de
+bajo riesgo) exige además calibración demostrada estimado-vs-real.
