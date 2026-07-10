@@ -58,7 +58,7 @@ rollback ◄── monitor ◄── applier ◄── approval (Telegram: diges
                        D1 (histórico) + events (event store) + KV (efímero)
 ```
 
-**Agentes = módulos JS** en `worker/agents/`, cada uno exporta
+**Agentes = módulos JS** en `optimizer/agents/` (subcarpeta única del optimizador: código, tests, migraciones y docs en `optimizer/`), cada uno exporta
 `run(context) → Promise<Result>`: `collector.js`, `normalizer.js`,
 `competitors.js`, `scoring.js`, `proposal.js`, `approval.js`, `applier.js`,
 `monitor.js`, `rollback.js`, más `orchestrator.js` (job/batch/cursor) y

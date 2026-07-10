@@ -4,7 +4,7 @@
 
 **Goal:** F0 (bootstrap: D1 + esquema + health check + sync de catálogo + cron) y F1 (pipeline nocturno de snapshots propios y de competencia + KPIs por Telegram), 100% solo-lectura hacia MercadoLibre.
 
-**Architecture:** Se extiende el Worker `mlpu-proxy` existente con módulos nuevos en `worker/agents/` (contrato `run(ctx)`), una base D1 para todo lo histórico y un orquestador Job→Batch→Item que corre por cron en ventana nocturna respetando el presupuesto de subrequests. Telegram es la única UI (`/estado`, `/kpi`, `/agente sync`). Spec: `docs/superpowers/specs/2026-07-10-agente-optimizacion-ml-design.md`.
+**Architecture:** Se extiende el Worker `mlpu-proxy` existente con módulos nuevos en `optimizer/agents/` (contrato `run(ctx)`), una base D1 para todo lo histórico y un orquestador Job→Batch→Item que corre por cron en ventana nocturna respetando el presupuesto de subrequests. Telegram es la única UI (`/estado`, `/kpi`, `/agente sync`). Spec: `optimizer/docs/2026-07-10-agente-optimizacion-ml-design.md`.
 
 **Tech Stack:** Cloudflare Workers (JS + JSDoc, sin build), D1 (SQLite), KV existente, cron triggers, `node --test` para lógica pura, wrangler.
 
@@ -17,7 +17,7 @@
 - Límites de plataforma = configuración en D1 (`feature_flags`), nunca hardcodeados en lógica: `BATCH_SIZE` (default 30), `SUBREQUEST_BUDGET` (default 45), `CRON_WINDOW_UTC` (default `"6-10"`).
 - Reusar SIEMPRE: `getValidAccessToken(env)` (worker/index.js:99), `mlFetch(url, options, {retries})` (worker/ml-fetch.js:15), `tgSend(env, chatId, text, extra)` (worker/telegram-bot.js:54). No duplicar auth ni fetch.
 - La API pública de ML se llama vía `https://api.mercadolibre.com`; el header `Authorization: Bearer <token>` va en todas las llamadas (el token ya existe; no crear flujos de auth nuevos).
-- Tests: `node --test worker/test/` desde la raíz del repo. Lógica pura testeada sin red ni D1 real (stubs inyectados).
+- Tests: `node --test optimizer/test/` desde la raíz del repo. Lógica pura testeada sin red ni D1 real (stubs inyectados).
 - Commits frecuentes, mensajes en español, terminar con `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 
 ---
@@ -25,8 +25,8 @@
 ### Task 1: Esquema D1, binding y documentación de secretos
 
 **Files:**
-- Create: `worker/migrations/0001_init.sql`
-- Create: `worker/agents/README.md`
+- Create: `optimizer/migrations/0001_init.sql`
+- Create: `optimizer/README.md`
 - Modify: `worker/wrangler.toml`
 
 **Interfaces:**
@@ -40,7 +40,7 @@ Expected: imprime `database_id = "<uuid>"`. Copiar ese uuid para el Step 3.
 
 - [ ] **Step 2: Escribir la migración inicial**
 
-Crear `worker/migrations/0001_init.sql`:
+Crear `optimizer/migrations/0001_init.sql`:
 
 ```sql
 -- MLPU-Optimizer: esquema inicial (spec 2026-07-10 §5).
@@ -166,6 +166,7 @@ crons = ["*/15 6-9 * * *"]
 binding = "DB"
 database_name = "mlpu-db"
 database_id = "<uuid del Step 1>"
+migrations_dir = "../optimizer/migrations"
 ```
 
 - [ ] **Step 4: Aplicar migraciones local y remoto, verificar**
@@ -176,13 +177,13 @@ Expected: lista con las 13 tablas (`changes, competitor_snapshots, events, exper
 
 - [ ] **Step 5: Documentar bindings y secretos**
 
-Crear `worker/agents/README.md`:
+Crear `optimizer/README.md`:
 
 ```markdown
 # MLPU-Optimizer (agentes)
 
 Módulos del agente de optimización. Contrato: cada agente exporta
-`run(ctx)`. Spec: docs/superpowers/specs/2026-07-10-agente-optimizacion-ml-design.md
+`run(ctx)`. Spec: optimizer/docs/2026-07-10-agente-optimizacion-ml-design.md
 
 ## Bindings (wrangler.toml)
 - `DB`   — D1 `mlpu-db`: TODO lo histórico (ver migrations/).
@@ -207,7 +208,7 @@ Módulos del agente de optimización. Contrato: cada agente exporta
 - [ ] **Step 6: Commit**
 
 ```bash
-git add worker/migrations/0001_init.sql worker/agents/README.md worker/wrangler.toml
+git add optimizer/migrations/0001_init.sql optimizer/README.md worker/wrangler.toml
 git commit -m "F0: esquema D1, binding DB, cron nocturno y doc de secretos"
 ```
 
@@ -216,8 +217,8 @@ git commit -m "F0: esquema D1, binding DB, cron nocturno y doc de secretos"
 ### Task 2: `db.js` — acceso a D1 testeable
 
 **Files:**
-- Create: `worker/agents/db.js`
-- Test: `worker/test/db.test.js`
+- Create: `optimizer/agents/db.js`
+- Test: `optimizer/test/db.test.js`
 
 **Interfaces:**
 - Consumes: `env.DB` (D1Database: `.prepare(sql).bind(...args)` → `.run()/.first()/.all()`).
@@ -235,7 +236,7 @@ git commit -m "F0: esquema D1, binding DB, cron nocturno y doc de secretos"
 
 - [ ] **Step 1: Escribir tests con un stub de D1**
 
-Crear `worker/test/db.test.js`:
+Crear `optimizer/test/db.test.js`:
 
 ```js
 import { test } from 'node:test'
@@ -285,10 +286,10 @@ test('logEvent serializa data como JSON', async () => {
 
 - [ ] **Step 2: Correr y verificar que falla**
 
-Run: `node --test worker/test/db.test.js`
+Run: `node --test optimizer/test/db.test.js`
 Expected: FAIL — `Cannot find module '../agents/db.js'`.
 
-- [ ] **Step 3: Implementar `worker/agents/db.js`**
+- [ ] **Step 3: Implementar `optimizer/agents/db.js`**
 
 ```js
 /**
@@ -408,13 +409,13 @@ export async function markBatch(db, jobId, batchNo, status, error = null) {
 
 - [ ] **Step 4: Correr tests y verificar que pasan**
 
-Run: `node --test worker/test/db.test.js`
+Run: `node --test optimizer/test/db.test.js`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/agents/db.js worker/test/db.test.js
+git add optimizer/agents/db.js optimizer/test/db.test.js
 git commit -m "F0: db.js, acceso D1 testeable (flags, listings, snapshots, jobs/batches)"
 ```
 
@@ -423,8 +424,8 @@ git commit -m "F0: db.js, acceso D1 testeable (flags, listings, snapshots, jobs/
 ### Task 3: `normalizer.js` — API de ML → modelo interno
 
 **Files:**
-- Create: `worker/agents/normalizer.js`
-- Test: `worker/test/normalizer.test.js`
+- Create: `optimizer/agents/normalizer.js`
+- Test: `optimizer/test/normalizer.test.js`
 
 **Interfaces:**
 - Consumes: objetos crudos de la API de ML (ítem de `/items?ids=`, resultados de `/sites/MLC/search`).
@@ -436,7 +437,7 @@ git commit -m "F0: db.js, acceso D1 testeable (flags, listings, snapshots, jobs/
 
 - [ ] **Step 1: Escribir tests**
 
-Crear `worker/test/normalizer.test.js`:
+Crear `optimizer/test/normalizer.test.js`:
 
 ```js
 import { test } from 'node:test'
@@ -494,10 +495,10 @@ test('competitorAggregates devuelve null sin muestra', () => {
 
 - [ ] **Step 2: Correr y verificar que falla**
 
-Run: `node --test worker/test/normalizer.test.js`
+Run: `node --test optimizer/test/normalizer.test.js`
 Expected: FAIL — módulo inexistente.
 
-- [ ] **Step 3: Implementar `worker/agents/normalizer.js`**
+- [ ] **Step 3: Implementar `optimizer/agents/normalizer.js`**
 
 ```js
 /**
@@ -570,13 +571,13 @@ export function competitorAggregates(results, ownSellerId) {
 
 - [ ] **Step 4: Correr tests y verificar que pasan**
 
-Run: `node --test worker/test/normalizer.test.js`
+Run: `node --test optimizer/test/normalizer.test.js`
 Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/agents/normalizer.js worker/test/normalizer.test.js
+git add optimizer/agents/normalizer.js optimizer/test/normalizer.test.js
 git commit -m "F1: normalizer puro (item→listing, snapshot, agregados de competencia)"
 ```
 
@@ -585,8 +586,8 @@ git commit -m "F1: normalizer puro (item→listing, snapshot, agregados de compe
 ### Task 4: `mlapi.js` — cliente de lectura con contador de subrequests
 
 **Files:**
-- Create: `worker/agents/mlapi.js`
-- Test: `worker/test/mlapi.test.js`
+- Create: `optimizer/agents/mlapi.js`
+- Test: `optimizer/test/mlapi.test.js`
 
 **Interfaces:**
 - Consumes: `mlFetch(url, options, {retries})` de `../ml-fetch.js`; token vía parámetro.
@@ -599,7 +600,7 @@ git commit -m "F1: normalizer puro (item→listing, snapshot, agregados de compe
 
 - [ ] **Step 1: Escribir tests**
 
-Crear `worker/test/mlapi.test.js`:
+Crear `optimizer/test/mlapi.test.js`:
 
 ```js
 import { test } from 'node:test'
@@ -636,10 +637,10 @@ test('get manda Authorization', async () => {
 
 - [ ] **Step 2: Correr y verificar que falla**
 
-Run: `node --test worker/test/mlapi.test.js`
+Run: `node --test optimizer/test/mlapi.test.js`
 Expected: FAIL — módulo inexistente.
 
-- [ ] **Step 3: Implementar `worker/agents/mlapi.js`**
+- [ ] **Step 3: Implementar `optimizer/agents/mlapi.js`**
 
 ```js
 /**
@@ -647,7 +648,7 @@ Expected: FAIL — módulo inexistente.
  * subrequests/errores (presupuesto por invocación, spec §3 y §7).
  * Sin métodos de escritura a propósito: F1 es solo-lectura.
  */
-import { mlFetch } from '../ml-fetch.js'
+import { mlFetch } from '../../worker/ml-fetch.js'
 
 const ML = 'https://api.mercadolibre.com'
 
@@ -675,13 +676,13 @@ export function makeApi({ token, fetcher = mlFetch }) {
 
 - [ ] **Step 4: Correr tests y verificar que pasan**
 
-Run: `node --test worker/test/mlapi.test.js`
+Run: `node --test optimizer/test/mlapi.test.js`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/agents/mlapi.js worker/test/mlapi.test.js
+git add optimizer/agents/mlapi.js optimizer/test/mlapi.test.js
 git commit -m "F1: cliente ML de solo lectura con contadores de subrequests"
 ```
 
@@ -690,8 +691,8 @@ git commit -m "F1: cliente ML de solo lectura con contadores de subrequests"
 ### Task 5: `collector.js` — estado propio + snapshots
 
 **Files:**
-- Create: `worker/agents/collector.js`
-- Test: `worker/test/collector.test.js`
+- Create: `optimizer/agents/collector.js`
+- Test: `optimizer/test/collector.test.js`
 
 **Interfaces:**
 - Consumes: `makeApi` (Task 4), `normalizeItem/snapshotFromListing` (Task 3), `upsertListing/insertListingSnapshot` (Task 2).
@@ -701,7 +702,7 @@ git commit -m "F1: cliente ML de solo lectura con contadores de subrequests"
 
 - [ ] **Step 1: Escribir tests**
 
-Crear `worker/test/collector.test.js`:
+Crear `optimizer/test/collector.test.js`:
 
 ```js
 import { test } from 'node:test'
@@ -752,10 +753,10 @@ test('collectBatch tolera fallo de visitas (null) sin abortar', async () => {
 
 - [ ] **Step 2: Correr y verificar que falla**
 
-Run: `node --test worker/test/collector.test.js`
+Run: `node --test optimizer/test/collector.test.js`
 Expected: FAIL — módulo inexistente.
 
-- [ ] **Step 3: Implementar `worker/agents/collector.js`**
+- [ ] **Step 3: Implementar `optimizer/agents/collector.js`**
 
 ```js
 /**
@@ -808,13 +809,13 @@ export async function collectBatch(ctx, itemIds) {
 
 - [ ] **Step 4: Correr tests y verificar que pasan**
 
-Run: `node --test worker/test/collector.test.js`
+Run: `node --test optimizer/test/collector.test.js`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/agents/collector.js worker/test/collector.test.js
+git add optimizer/agents/collector.js optimizer/test/collector.test.js
 git commit -m "F1: collector (multiget items+visitas → listings y snapshots)"
 ```
 
@@ -823,8 +824,8 @@ git commit -m "F1: collector (multiget items+visitas → listings y snapshots)"
 ### Task 6: `competitors.js` — agregados de competencia
 
 **Files:**
-- Create: `worker/agents/competitors.js`
-- Test: `worker/test/competitors.test.js`
+- Create: `optimizer/agents/competitors.js`
+- Test: `optimizer/test/competitors.test.js`
 
 **Interfaces:**
 - Consumes: `competitorAggregates` (Task 3), `insertCompetitorSnapshot` (Task 2), `api.get` (Task 4), `cleanTitle` de `../publisher.js:20` (limpia títulos, ya existe).
@@ -834,7 +835,7 @@ git commit -m "F1: collector (multiget items+visitas → listings y snapshots)"
 
 - [ ] **Step 1: Escribir tests**
 
-Crear `worker/test/competitors.test.js`:
+Crear `optimizer/test/competitors.test.js`:
 
 ```js
 import { test } from 'node:test'
@@ -885,10 +886,10 @@ test('sin resultados no inserta y no lanza', async () => {
 
 - [ ] **Step 2: Correr y verificar que falla**
 
-Run: `node --test worker/test/competitors.test.js`
+Run: `node --test optimizer/test/competitors.test.js`
 Expected: FAIL — módulo inexistente.
 
-- [ ] **Step 3: Implementar `worker/agents/competitors.js`**
+- [ ] **Step 3: Implementar `optimizer/agents/competitors.js`**
 
 ```js
 /**
@@ -897,7 +898,7 @@ Expected: FAIL — módulo inexistente.
  */
 import { competitorAggregates } from './normalizer.js'
 import { insertCompetitorSnapshot } from './db.js'
-import { cleanTitle } from '../publisher.js'
+import { cleanTitle } from '../../worker/publisher.js'
 
 /** Título → query de búsqueda: limpio, máx. 6 palabras, URL-encoded. */
 export function buildQuery(title) {
@@ -932,13 +933,13 @@ export async function competitorsForItems(ctx, rows) {
 
 - [ ] **Step 4: Correr tests y verificar que pasan**
 
-Run: `node --test worker/test/competitors.test.js`
+Run: `node --test optimizer/test/competitors.test.js`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/agents/competitors.js worker/test/competitors.test.js
+git add optimizer/agents/competitors.js optimizer/test/competitors.test.js
 git commit -m "F1: competencia (búsqueda oficial → agregados diarios por ítem)"
 ```
 
@@ -947,8 +948,8 @@ git commit -m "F1: competencia (búsqueda oficial → agregados diarios por íte
 ### Task 7: `orchestrator.js` — Job→Batch→Item con cursor y presupuesto
 
 **Files:**
-- Create: `worker/agents/orchestrator.js`
-- Test: `worker/test/orchestrator.test.js`
+- Create: `optimizer/agents/orchestrator.js`
+- Test: `optimizer/test/orchestrator.test.js`
 
 **Interfaces:**
 - Consumes: todo lo anterior (`db.js`, `collectBatch`, `competitorsForItems`, `makeApi`), `getValidAccessToken(env)` de `../index.js:99`.
@@ -959,7 +960,7 @@ git commit -m "F1: competencia (búsqueda oficial → agregados diarios por íte
 
 - [ ] **Step 1: Escribir tests de la lógica pura**
 
-Crear `worker/test/orchestrator.test.js`:
+Crear `optimizer/test/orchestrator.test.js`:
 
 ```js
 import { test } from 'node:test'
@@ -980,10 +981,10 @@ test('inWindow tolera config corrupta (default: cerrada)', () => {
 
 - [ ] **Step 2: Correr y verificar que falla**
 
-Run: `node --test worker/test/orchestrator.test.js`
+Run: `node --test optimizer/test/orchestrator.test.js`
 Expected: FAIL — módulo inexistente.
 
-- [ ] **Step 3: Implementar `worker/agents/orchestrator.js`**
+- [ ] **Step 3: Implementar `optimizer/agents/orchestrator.js`**
 
 ```js
 /**
@@ -992,7 +993,7 @@ Expected: FAIL — módulo inexistente.
  * cron procesa 1 batch; el ciclo se completa a lo largo de la ventana.
  * F1: SOLO lectura hacia ML.
  */
-import { getValidAccessToken } from '../index.js'
+import { getValidAccessToken } from '../../worker/index.js'
 import { makeApi } from './mlapi.js'
 import { collectBatch } from './collector.js'
 import { competitorsForItems } from './competitors.js'
@@ -1100,13 +1101,13 @@ export async function coverage(db, sellerId) {
 
 - [ ] **Step 4: Correr TODOS los tests**
 
-Run: `node --test worker/test/`
+Run: `node --test optimizer/test/`
 Expected: PASS (todos; los de tasks anteriores siguen verdes).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/agents/orchestrator.js worker/test/orchestrator.test.js
+git add optimizer/agents/orchestrator.js optimizer/test/orchestrator.test.js
 git commit -m "F1: orquestador Job→Batch→Item con ventana, presupuesto y coverage"
 ```
 
@@ -1115,8 +1116,8 @@ git commit -m "F1: orquestador Job→Batch→Item con ventana, presupuesto y cov
 ### Task 8: Health check F0 + siembra de config
 
 **Files:**
-- Create: `worker/agents/health.js`
-- Test: `worker/test/health.test.js`
+- Create: `optimizer/agents/health.js`
+- Test: `optimizer/test/health.test.js`
 
 **Interfaces:**
 - Consumes: `getValidAccessToken` (index.js), `makeApi` (Task 4), `getFlag/setFlag` (Task 2), `coverage` (Task 7).
@@ -1125,7 +1126,7 @@ git commit -m "F1: orquestador Job→Batch→Item con ventana, presupuesto y cov
 
 - [ ] **Step 1: Escribir tests del formateo y la siembra**
 
-Crear `worker/test/health.test.js`:
+Crear `optimizer/test/health.test.js`:
 
 ```js
 import { test } from 'node:test'
@@ -1150,10 +1151,10 @@ test('formatHealth marca verde/rojo y muestra coverage', () => {
 
 - [ ] **Step 2: Correr y verificar que falla**
 
-Run: `node --test worker/test/health.test.js`
+Run: `node --test optimizer/test/health.test.js`
 Expected: FAIL — módulo inexistente.
 
-- [ ] **Step 3: Implementar `worker/agents/health.js`**
+- [ ] **Step 3: Implementar `optimizer/agents/health.js`**
 
 ```js
 /**
@@ -1161,7 +1162,7 @@ Expected: FAIL — módulo inexistente.
  * configuración (los límites de plataforma viven aquí como config, no en
  * código — spec §9). Salida humana para /estado.
  */
-import { getValidAccessToken } from '../index.js'
+import { getValidAccessToken } from '../../worker/index.js'
 import { makeApi } from './mlapi.js'
 import { getFlag, setFlag } from './db.js'
 
@@ -1210,13 +1211,13 @@ export function formatHealth(report, cov, job) {
 
 - [ ] **Step 4: Correr tests y verificar que pasan**
 
-Run: `node --test worker/test/health.test.js`
+Run: `node --test optimizer/test/health.test.js`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/agents/health.js worker/test/health.test.js
+git add optimizer/agents/health.js optimizer/test/health.test.js
 git commit -m "F0: health check (oauth, usuario, D1, siembra de config)"
 ```
 
@@ -1225,8 +1226,8 @@ git commit -m "F0: health check (oauth, usuario, D1, siembra de config)"
 ### Task 9: `kpi.js` — digest diario para Telegram
 
 **Files:**
-- Create: `worker/agents/kpi.js`
-- Test: `worker/test/kpi.test.js`
+- Create: `optimizer/agents/kpi.js`
+- Test: `optimizer/test/kpi.test.js`
 
 **Interfaces:**
 - Consumes: D1 (queries sobre `listing_snapshots`, `orders`, `system_metrics`).
@@ -1235,7 +1236,7 @@ git commit -m "F0: health check (oauth, usuario, D1, siembra de config)"
 
 - [ ] **Step 1: Escribir test del formateo**
 
-Crear `worker/test/kpi.test.js`:
+Crear `optimizer/test/kpi.test.js`:
 
 ```js
 import { test } from 'node:test'
@@ -1267,10 +1268,10 @@ test('formatDigest tolera baseline cero (sin división por cero)', () => {
 
 - [ ] **Step 2: Correr y verificar que falla**
 
-Run: `node --test worker/test/kpi.test.js`
+Run: `node --test optimizer/test/kpi.test.js`
 Expected: FAIL — módulo inexistente.
 
-- [ ] **Step 3: Implementar `worker/agents/kpi.js`**
+- [ ] **Step 3: Implementar `optimizer/agents/kpi.js`**
 
 ```js
 /**
@@ -1334,13 +1335,13 @@ export function formatDigest(d) {
 
 - [ ] **Step 4: Correr tests y verificar que pasan**
 
-Run: `node --test worker/test/kpi.test.js`
+Run: `node --test optimizer/test/kpi.test.js`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/agents/kpi.js worker/test/kpi.test.js
+git add optimizer/agents/kpi.js optimizer/test/kpi.test.js
 git commit -m "F1: KPIs (digest diario con deltas de visitas, órdenes y coverage)"
 ```
 
@@ -1365,10 +1366,10 @@ En el objeto exportado por default, reemplazar el handler `scheduled`:
   // sigue APAGADO — se reactiva por flag cuando el usuario lo pida.
   async scheduled(event, env, ctx) {
     ctx.waitUntil((async () => {
-      const { runCycle } = await import('./agents/orchestrator.js')
+      const { runCycle } = await import('../optimizer/agents/orchestrator.js')
       const r = await runCycle(env)
       if (r.status === 'done') {
-        const { buildDigest } = await import('./agents/kpi.js')
+        const { buildDigest } = await import('../optimizer/agents/kpi.js')
         const { tgSend } = await import('./telegram-bot.js')
         await tgSend(env, env.TELEGRAM_CHAT_ID, await buildDigest(env.DB, env.SELLER_ID))
       }
@@ -1389,7 +1390,7 @@ la orden ya fue obtenida de ML y procesada hacia KV (buscar la llamada a
     // Espejo en D1 para el optimizador (F1). Nunca bloquea el flujo KV.
     if (env.DB) {
       try {
-        const { insertOrderRow, logEvent } = await import('./agents/db.js')
+        const { insertOrderRow, logEvent } = await import('../optimizer/agents/db.js')
         await insertOrderRow(env.DB, {
           order_id: String(order.id), seller_id: String(env.SELLER_ID),
           item_id: order.order_items?.[0]?.item?.id ?? null,
@@ -1412,20 +1413,20 @@ comandos existentes), añadir ANTES del fallback:
 ```js
   // ── Comandos del optimizador (F0/F1) ─────────────────────────
   if (text === '/estado') {
-    const { runHealthCheck, formatHealth } = await import('./agents/health.js')
-    const { coverage } = await import('./agents/orchestrator.js')
-    const { getRunningJob } = await import('./agents/db.js')
+    const { runHealthCheck, formatHealth } = await import('../optimizer/agents/health.js')
+    const { coverage } = await import('../optimizer/agents/orchestrator.js')
+    const { getRunningJob } = await import('../optimizer/agents/db.js')
     const report = await runHealthCheck(env)
     const cov = await coverage(env.DB, env.SELLER_ID).catch(() => null)
     const job = await getRunningJob(env.DB, env.SELLER_ID, 'collect').catch(() => null)
     return tgSend(env, chatId, formatHealth(report, cov, job), { reply_markup: MAIN_KB })
   }
   if (text === '/kpi') {
-    const { buildDigest } = await import('./agents/kpi.js')
+    const { buildDigest } = await import('../optimizer/agents/kpi.js')
     return tgSend(env, chatId, await buildDigest(env.DB, env.SELLER_ID), { reply_markup: MAIN_KB })
   }
   if (text === '/agente sync') {
-    const { runCycle } = await import('./agents/orchestrator.js')
+    const { runCycle } = await import('../optimizer/agents/orchestrator.js')
     const r = await runCycle(env, { force: true })
     return tgSend(env, chatId,
       `⚙️ sync: <b>${r.status}</b>${r.batch != null ? ` · batch ${r.batch}` : ''}` +
@@ -1439,7 +1440,7 @@ Ubicar el bloque donde el bot ya compara `text === '...'` para comandos.)
 
 - [ ] **Step 4: Verificación estática y tests**
 
-Run: `node --check worker/index.js && node --check worker/telegram-bot.js && node --test worker/test/`
+Run: `node --check worker/index.js && node --check worker/telegram-bot.js && node --test optimizer/test/`
 Expected: sin errores de sintaxis, todos los tests PASS.
 
 - [ ] **Step 5: Commit**
