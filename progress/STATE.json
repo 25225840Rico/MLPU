@@ -1,37 +1,49 @@
 {
-  "phase": "bot re-enfocado: catalogado/publicación multi-operador (cron post-venta apagado)",
-  "status": "Sesión 7: bot vuelve al servicio como CATALOGADOR (commit ce3a59e, Version b67b83e1): fotos → IA (haiku) → vista previa editable → publicar en ML con envío pagado por comprador y stock 1. Multi-operador: admin + chats aprobados (KV chats:allowed) publican a la misma cuenta ML. Webhook activo; cron sigue OFF. Inventario: 129/149 envío pagado, stock 1 en 143.",
-  "last_session": "2026-07-03T23:00:00Z",
-  "last_worker_version": "b67b83e1-cd1d-42ed-a397-169af4eecbb4",
-  "last_commit": "ce3a59e (main, pusheado)",
-  "next_step": "Retomar desde progress/HANDOFF.txt: (1) rechazar solicitud del chat 999999999; (2) prueba real de catalogado foto→Analizar→Publicar con wrangler tail abierto; (3) alta de la esposa (/start → aprobar) y prueba en paralelo.",
+  "phase": "MLPU-OPTIMIZER: spec v1.0 + plan F0+F1 LISTOS en optimizer/docs/ (nada implementado; falta elegir modo de ejecución) + bot catalogador operativo con regla Premium/envío comprador",
+  "status": "Sesión 11 (2026-07-10): (a) regla nueva en el código (Premium + envío por comprador, deploy fb6a8228, commit ca12962); (b) MIGRACIÓN MASIVA del inventario vía proxy /ml/: 160/160 a gold_pro, envío por comprador en 109, 51 con envío gratis FORZADO por ML (precio ≥ $19.990, no desactivable por API), 1 no editable (MLC1986993239 under_review). Excel nuevo inventario_ML_2026-07-10.xlsx; reporte en progress/log/inventory-report-2026-07-10.json.",
+  "last_session": "2026-07-10T00:00:00-04:00",
+  "last_worker_version": "fb6a8228-fd3e-4d5b-95ce-743d3148e54b",
+  "last_commit": "ca12962 (main, pusheado) — Publicaciones siempre en Premium y envío pagado por el comprador",
+  "next_step": "MLPU-OPTIMIZER: preguntar al usuario el modo de ejecución del plan (1. subagent-driven recomendada / 2. inline) y ejecutar optimizer/docs/2026-07-10-optimizer-f0-f1.md desde la Task 1 (wrangler d1 create mlpu-db + esquema + binding). Commits locales 4c2754f/69e23fa/f93a873 sin push: pushear al retomar. (Pendiente paralelo: prueba real del bot por lotes.)",
   "open_tasks": [
-    "Probar catalogado real (foto → publicar) desde el chat del admin",
+    "Prueba real de la separación automática (fotos mezcladas de 2-3 autos) + verificar Premium/envío comprador en el ítem publicado",
+    "Subir +20% las 5 publicaciones under_review cuando salgan de revisión (MLC4044511638, MLC4047507866, MLC4047533140, MLC4047667126, MLC1986993239) — ya quedaron Premium en la migración 2026-07-10",
+    "MLC1986993239 al salir de revisión: poner envío por comprador (PUT rechazado por under_review) y bajar stock a 1",
     "Alta de la esposa: /start → aprobar → prueba desde su celular",
-    "Rechazar solicitud de acceso de prueba (chat 999999999)",
+    "Corregir atributo BRAND de MLC4146267638 (o pausar el ítem de prueba)",
+    "Verificar descripción incluida en la próxima publicación real",
+    "MLC1986993239 under_review: bajar stock a 1 cuando salga de revisión",
     "Decidir destino del SPA (queda como legacy en el repo)",
-    "Opcional: 20 publicaciones ≥$25.990 siguen con envío gratis obligatorio"
+    "Opcional: actualizar Node 20→24 en .github/workflows/deploy.yml"
   ],
   "blockers": [
-    "ML Chile obliga envío gratis en publicaciones ≥ ~$19.990: la API ignora free_shipping=false (200 silencioso) o devuelve field_not_updatable. Afecta a 40 publicaciones."
+    "PR #1 (cotizador-costos) bloqueado esperando URL+anon-key de Supabase vivo.",
+    "Envío gratis OBLIGATORIO a precio ≥ $19.990 EXACTO en MLC — sin salida salvo precio < $19.990 (2026-07-10): aplica a todos los listing_types y ML revierte en silencio; a $19.989 se libera (verificado). Los 2 ítems que estaban justo en $19.990 se bajaron a $19.989 (Premium + envío por comprador); quedan 49 con precio > $19.990 en Premium + envío gratis (costo vendedor ~$6.300/venta)."
   ],
   "key_findings": [
-    "Items con variaciones: el precio NO se cambia con PUT price (item.price.not_modifiable); hay que mandar variations:[{id, price}].",
-    "Las notificaciones orders_v2 → /ml/notifications FUNCIONAN: el KV se repobló solo con 8 órdenes tras la limpieza del 06-19 (la más nueva del 06-29).",
-    "ML puede responder 200 a un PUT de items e IGNORAR el cambio de shipping.free_shipping: verificar siempre el valor, no el status code.",
-    "El bloqueo blocked_by_conversation_initiated_by_seller_limited seguía activo al 06-29 (ig_cta_warned=true en la última orden).",
-    "El bot Python NO debe usar el mismo token del Worker (polling=deleteWebhook mata el webhook)."
+    "Telegram entrega los updates de un álbum casi simultáneos (webhook concurrente): NUNCA hacer read-modify-write de una clave KV compartida por foto; una clave por foto (lotp:<chat>:<lote>:<msgId>) con file_id en metadata.",
+    "KV.list por prefijo devuelve orden lexicográfico: paddear el message_id a 12 dígitos conserva el orden de llegada. list es eventualmente consistente (conteo puede venir corto por ~segundos).",
+    "editMessageText con texto idéntico devuelve error 'message is not modified' (tgApi lo traga, ok:false).",
+    "listing_type 'free' NO existe en todas las categorías: consultar /users/{id}/available_listing_types; user id = sufijo del access_token.",
+    "ML rechaza descripciones plain_text con emojis/símbolos: sanitizar siempre.",
+    "POST /items/validate reproduce errores de publicación sin crear el ítem.",
+    "Cloudflare Workers ~50 subrequests por invocación.",
+    "Items con variaciones: precio vía variations:[{id,price}], no PUT price.",
+    "ML puede responder 200 e IGNORAR free_shipping: verificar el valor, no el status.",
+    "El bot Python NO debe usar el mismo token del Worker (polling mata el webhook)."
   ],
   "known_limits": [
-    "Umbral de envío gratis obligatorio MLC ≈ $19.990 (no es 100% por precio: algunos ítems de $45.000 sí aceptaron el cambio).",
-    "Órdenes al KV solo por notificación orders_v2 (el Worker sigue recibiéndolas aunque el bot esté apagado)."
+    "Umbral de envío gratis obligatorio MLC ≈ $19.990.",
+    "Órdenes al KV solo por notificación orders_v2 (cron apagado).",
+    "API de bots de Telegram sin sonidos custom (se configura en el cliente)."
   ],
-  "bot": "t.me/Pulicadorlibre_bot (webhook BORRADO — fuera de servicio)",
+  "bot": "t.me/Pulicadorlibre_bot (webhook ACTIVO — catalogador por lotes)",
   "telegram_chat_id": "1036420688",
   "seller_id": "283388639",
   "worker_url": "https://mlpu-proxy.aronricocl.workers.dev",
   "kv_ml_tokens": "1f6324c3659d4388bec284825c2864be",
   "kv_ml_orders": "d72bf35159b54eabadffafc521c1562b",
   "cron": "desactivado (era */10 * * * *)",
-  "repo": "https://github.com/25225840Rico/MLPU"
+  "repo": "https://github.com/25225840Rico/MLPU",
+  "test_listing": "MLC4146267638 (Matchbox Bronco, $12.000, Clásica, BRAND por corregir)"
 }

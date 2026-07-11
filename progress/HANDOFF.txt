@@ -1,87 +1,92 @@
-HANDOFF — MLPU · Bot Telegram catalogador multi-operador — 2026-07-03 (sesión 7)
+HANDOFF - MLPU / AGENTE DE OPTIMIZACION ML - 2026-07-10
 
-OBJETIVO
-Reemplazar el SPA "ML AutoPublisher" (index.html + src/) por el bot de Telegram:
-2 personas (usuario + esposa), cada una desde su celular, mandan fotos de
-productos al bot y este publica en LA MISMA cuenta de MercadoLibre del usuario.
-Reglas fijas: envío SIEMPRE a cargo del comprador, stock SIEMPRE 1.
+OBJETIVO EN CURSO: disenar y construir un agente autonomo de optimizacion
+para la cuenta de MercadoLibre del usuario (seller 283388639, GUAR8622673),
+extendiendo el proyecto MLPU existente (NO greenfield). Estamos en la fase
+de BRAINSTORMING (skill superpowers:brainstorming), diseno casi cerrado.
 
-REPO Y ENTORNO
-- Repo: https://github.com/25225840Rico/MLPU (main). Trabajo directo en
-  C:\Users\aronr\OneDrive\Escritorio\automl (ES el clon; worker/ = código vivo).
-- Último commit: ce3a59e (pusheado). Worker Version: b67b83e1 (desplegado).
-- Worker: https://mlpu-proxy.aronricocl.workers.dev
-- Bot: t.me/Pulicadorlibre_bot · admin chat 1036420688 · seller 283388639 (MLC).
-- KV: ML_TOKENS 1f6324c3659d4388bec284825c2864be (clave ml_session con OAuth) ·
-  ML_ORDERS d72bf35159b54eabadffafc521c1562b (órdenes + chats:allowed +
-  pending:<chatId> = borradores de catalogado, TTL 1h).
-- Secrets del Worker (ya puestos): ANTHROPIC_API_KEY, ML_CLIENT_ID,
-  ML_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
-- WEBHOOK ACTIVO (se reactivó con /tg/admin?action=set). CRON APAGADO
-  (wrangler.toml crons=[]; el scheduler post-venta NO corre; decisión usuario).
-- Herramienta PowerShell puede no estar; usar Bash (Git Bash). Python 3.14 con
-  openpyxl instalado. wrangler kv mete "npm notice" en stdout (filtrar con grep).
+DECISIONES YA APROBADAS POR EL USUARIO (via preguntas + 4 secciones):
+1) Stack: extender MLPU = Cloudflare Worker + KV + cron + bot Telegram,
+   agregando Cloudflare D1 (SQLite serverless, free) para TODO lo historico.
+   KV solo efimero (tokens/locks/config). JavaScript con JSDoc estricto
+   (NO TypeScript). Agentes = modulos JS con contrato run(context)->Result
+   en worker/agents/ (collector, competitors, pricing, seo, scoring,
+   proposal, approval, applier, rollback, monitor). NADA de FastAPI/
+   Postgres/Redis/Docker (plantilla original descartada por costo).
+2) Autonomia: TODO cambio pasa por aprobacion en Telegram (digest diario
+   matinal con botones Aprobar/Rechazar/Aprobar todo). Modo Auto opcional
+   por feature_flag mas adelante (solo confidence alta + bajo impacto).
+3) Alcance: 4 frentes en fases: F0 bootstrap (credenciales, sync catalogo,
+   config inicial) -> F1 Collector+D1+tablero KPIs Telegram (solo lectura)
+   -> F2 competencia+score+propuestas precio+applier+monitor+rollback
+   (100% deterministico, sin LLM) -> F3 SEO/calidad fichas (UNICO modulo
+   con LLM, Haiku) -> F4 rotacion/inventario+experimentos A/B.
+4) Ritmo/costo: ciclo diario nocturno (cron cada 15 min ventana 02:00-06:00,
+   lotes ~30 items por limite de 50 subrequests/invocacion, patron
+   Job->Batch->Item con reintento por batch). Presupuesto LLM < US$3/mes
+   con auto-apagado por flag. Infra US$0 hasta ~5.000 items.
+5) Modelo de datos D1 aprobado (con ajustes del usuario): listings,
+   listing_snapshots (snapshot_at UTC timestamp, + buy_box_price,
+   listing_type, shipping_mode), competitor_snapshots (agregados diarios
+   + sample_size, category_id, top5_json), orders, opportunities (score,
+   expected_gain, confidence, priority), proposals (payload_json +
+   estimated_impact_json, absorbe approvals, tg_message_id, expiran 72h),
+   changes (before_json completo = rollback; verified_at,
+   verification_status: verified/pending/failed/timeout; NUNCA se borra),
+   experiments, jobs, job_batches, events (event store de dominio:
+   PRICE_CHANGED, PROPOSAL_APPROVED, etc., poda 180d), feature_flags,
+   system_metrics (salud: api_calls, errores, cron_duration, llm_cost...).
+   Todas las tablas llevan seller_id (multi-tenant). Normalizer separado
+   del Collector; el raw de ML NO se persiste.
+6) Guardrails aprobados: MAX_PRICE_DELTA_PCT +-10%, cooldown 7 dias/item,
+   min_price por item (default -25%), terminacion 990/989, REGLA DEL
+   UMBRAL $19.990 (cruzarlo cuantifica el efecto envio gratis obligatorio
+   ~$6.300/venta en estimated_impact_json; umbral en config), under_review/
+   sub_status intocables, variaciones via variations:[{id,price}],
+   KILL_SWITCH y DRY_RUN por flag, verificacion por relectura post-PUT,
+   abortar batch tras 3 fallas, circuit breaker global (5xx -> KILL_SWITCH
+   + aviso), MIN_BASELINE_VISITS (default 50) para rollback automatico
+   (bajo eso solo alerta con boton Revertir), MAX_ACTIVE_OBSERVATIONS=10,
+   manual_override=true 7 dias si el Collector detecta cambio manual
+   (estado real != ultimo after_json nuestro). Rollback automatico SOLO
+   precio (visitas caen >40% vs baseline 14d con muestra suficiente);
+   ventana de observacion 7 dias; Monitor escribe impacto real vs estimado.
+7) Costos validados por escala (100/500/1000/5000): US$0 infra hasta 5.000
+   items (a 5.000: ampliar ventana cron o Workers Paid US$5/mes opcional);
+   LLM ~US$0.2-3/mes. Cuello real: ventana horaria del cron a 3-5k items.
+   Cache de analisis va en D1/Cache API, NO en KV (limite 1k writes/dia).
 
-ESTADO ACTUAL (todo desplegado y pusheado)
-1. Bot post-venta fuera de servicio (cron []) pero el webhook fue REACTIVADO
-   para el nuevo rol de catalogador. /tg/admin soporta info|set|off|catchup.
-2. Inventario (149 publicaciones): 129 con envío pagado por comprador, 20 con
-   envío gratis obligatorio (≥$25.990, ML no permite quitarlo; usuario decidió
-   no rebajarlas). 20 items quedaron a $19.980. Stock 1 en 143 (5 en 0 a
-   propósito; MLC1986993239 under_review no se pudo, sigue con 3).
-   Excel: automl\inventario_ML_2026-07-03.xlsx.
-3. NUEVO worker/publisher.js: analyzeProduct (4 llamadas paralelas a
-   claude-haiku-4-5-20251001: visión/SEO/precio/categoría), discoverCategories
-   (domain_discovery MLC), getRequiredAttrs + fillAttributesWithAI,
-   getMarketPrices, uploadPicture (multipart /pictures/items/upload),
-   createListing (listing_type free, garantía 30 días, shipping
-   {mode:me2, free_shipping:false, local_pick_up:false}, available_quantity:1,
-   descripción por POST /items/{id}/description aparte).
-4. telegram-bot.js integrado: FOTOS → catalogado por defecto (acumula
-   file_ids, botón "🤖 Analizar" = cat:go). Vista previa editable (cat_confirm):
-   botones cat:pub / cat:price / cat:title / cat:cats (top 5, recalcula
-   atributos) / cat:cond / cat:x. Si ML rechaza el alta, el borrador queda y
-   se puede Reintentar. El flujo de sticker/tracking quedó tras el botón
-   "📦 Despacho" (mode await_sticker). MAIN_KB nuevo con 📸 Catalogar.
-5. Acceso multi-operador: isAllowed = admin (TELEGRAM_CHAT_ID) o lista KV
-   chats:allowed. Chat desconocido → requestAccess al admin con botones
-   acc:ok:<id> / acc:no:<id> (approveChat). Cuando publica un operador, el
-   admin recibe aviso con link.
-6. Verificado: node --check OK en telegram-bot.js y publisher.js; POST
-   sintético a /tg/webhook con /start (llegó al chat real del admin) y con un
-   chat desconocido (999999999) que disparó la solicitud de acceso.
+ULTIMO PASO COMPLETADO: Seccion 4 (costos) presentada; el usuario aprobo
+las secciones 1-3 explicitamente y la 4 quedo presentada con la promesa de
+escribir el design doc al confirmarla. TAMBIEN COMPLETADO HOY (partes 1-4,
+ver log/2026-07-10.md): regla Premium+envio comprador en el codigo
+(deploy fb6a8228, commit ca12962 pusheado), migracion de los 160 items a
+gold_pro (109 envio comprador, 49 forzados >19.990, 2 bajados a 19.989),
+Excel inventario_ML_2026-07-10.xlsx generado y actualizado.
 
-ÚLTIMO PASO COMPLETADO
-Commit ce3a59e pusheado, Worker desplegado (b67b83e1), webhook re-registrado,
-pruebas sintéticas OK. Checkpoint guardado.
+PROXIMO PASO EXACTO:
+1) Leer la respuesta del usuario a la Seccion 4 (costos). Si aprueba:
+2) Escribir el design doc completo en
+   docs/superpowers/specs/2026-07-10-agente-optimizacion-ml-design.md
+   (dentro del repo automl) con TODO lo de arriba (secciones 1-4 + ajustes
+   del usuario), hacer spec self-review (placeholders, consistencia,
+   alcance, ambiguedad), commitearlo.
+3) Pedir al usuario que revise el spec (gate obligatorio del skill).
+4) Recien tras su aprobacion: invocar skill superpowers:writing-plans para
+   el plan de implementacion (empezar por F0+F1). NO IMPLEMENTAR ANTES.
+Hay tareas del harness creadas (#4 presentar diseno in_progress, #5 design
+doc, #6 revision usuario -> writing-plans): actualizarlas al avanzar.
 
-PRÓXIMO PASO EXACTO (al retomar, en este orden)
-1. Preguntar al usuario si RECHAZÓ la solicitud del chat 999999999 (era prueba
-   sintética mía; NO aprobarla).
-2. PRUEBA REAL de punta a punta: que el usuario mande fotos de un producto al
-   bot → 🤖 Analizar → revisar preview → ✅ Publicar. Monitorear con:
-     cd worker && npx wrangler tail mlpu-proxy --format pretty
-   Errores probables a ajustar en publisher.js/createListing: atributos
-   requeridos faltantes (cause item.attributes.missing_required), categoría
-   inválida, o formato de sale_terms según categoría.
-3. Alta de la esposa: ella manda /start al bot → al admin le llega Aprobar →
-   verificar que puede catalogar en paralelo (su pending:<chatId> es propio).
-4. Si el usuario borra una publicación de prueba, recordar que se puede pausar
-   en vez de borrar (PUT status paused).
+ARCHIVOS CLAVE:
+- Repo: C:\Users\aronr\OneDrive\Documentos\PROYECTOS\automl (main, ca12962)
+- worker/ (Worker mlpu-proxy: index.js proxy+OAuth, telegram-bot.js,
+  publisher.js) - el agente nuevo vivira en worker/agents/
+- progress/CHECKPOINT.md, progress/STATE.json, progress/log/2026-07-10.md
+  (partes 1-4 de hoy), progress/log/inventory-report-2026-07-10.json
+- SAVE.txt (raiz) - estado estilo videojuego
+- Worker URL: https://mlpu-proxy.aronricocl.workers.dev (proxy /ml/* con
+  token autoinyectado; asi se hizo la migracion masiva de hoy)
 
-ARCHIVOS CLAVE
-- worker/publisher.js (pipeline IA + publicación; reglas fijas del negocio).
-- worker/telegram-bot.js (webhook, acceso, flujo catalogado: buscar "Módulo 3",
-  handlePhoto, runCatalogAnalyze, sendCatalogPreview, runCatalogPublish,
-  isAllowed/requestAccess/approveChat; pending:<chatId> en ML_ORDERS).
-- worker/index.js (router, getValidAccessToken, handleTgAdmin info|set|off|catchup).
-- worker/wrangler.toml (crons=[] — NO reactivar el cron sin pedido del usuario).
-- src/agents/orchestrator.js + src/App.jsx (SPA original, referencia; legacy).
-- inventario_ML_2026-07-03.xlsx (snapshot del inventario).
-
-CÓMO RETOMAR
-- Leer este HANDOFF + progress/CHECKPOINT.md. No releer el historial.
-- Estado vivo: curl "https://mlpu-proxy.aronricocl.workers.dev/tg/admin?action=info"
-  (webhook debe apuntar a /tg/webhook).
-- Logs en vivo: cd worker && npx wrangler tail mlpu-proxy --format pretty
-- Continuar desde PRÓXIMO PASO EXACTO (prueba real + alta esposa).
+COMO RETOMAR: leer este archivo; el diseno completo esta en las decisiones
+1-7 de arriba (son el resumen fiel de lo aprobado). Continuar desde
+PROXIMO PASO EXACTO sin re-preguntar lo ya decidido.

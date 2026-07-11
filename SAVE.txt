@@ -1,0 +1,33 @@
+SAVE — MLPU (2026-07-10, sesión 11 — cierre)
+NUEVO FRENTE: MLPU-OPTIMIZER (agente autónomo de optimización).
+Diseño COMPLETO y aprobado (spec v1.0) + plan de implementación F0+F1
+LISTO, todo en optimizer/docs/ (commits 4c2754f spec, 69e23fa plan,
+f93a873 reestructura a subcarpeta optimizer/). NADA implementado aún.
+PRÓXIMO PASO AL RETOMAR: el usuario debe elegir cómo ejecutar el plan
+(1. subagent-driven [recomendada] o 2. inline) y arrancar por la Task 1
+del plan optimizer/docs/2026-07-10-optimizer-f0-f1.md (crear D1 mlpu-db,
+esquema, binding). Stack: extender Worker existente + D1, JS+JSDoc,
+solo-lectura en F1, aprobaciones por Telegram desde F2.
+
+--- sesión 11 (2026-07-10, partes 1-4) ---
+NUEVA REGLA (Worker fb6a8228, commit ca12962): TODAS las publicaciones salen
+en la MÁXIMA categoría (gold_pro Premium → Clásica → free según disponibilidad)
+y SIEMPRE con envío pagado por el comprador (se quitó el botón cat:ship del
+bot y draft.freeShipping). SPA: default gold_pro (selector manual sigue).
+estimateProfit ya no estima envío. Deploy verificado, commit pusheado.
+MIGRACIÓN MASIVA (mismo día): los 160 ítems del inventario subidos a Premium
+vía proxy /ml/; envío por comprador en 109; 51 con envío gratis FORZADO por
+ML (precio ≥ $19.990, regla obligatoria, no desactivable); MLC1986993239
+under_review no editable (corregir envío al salir). Excel nuevo:
+inventario_ML_2026-07-10.xlsx. Reporte: progress/log/inventory-report-2026-07-10.json.
+
+--- sesión 10 (2026-07-08) ---
+FLUJO FINAL POR LOTES desplegado (Worker 59f0d3b6, commit 4acc378 pusheado):
+mandás TODAS las fotos mezcladas → UN solo botón Analizar → la IA agrupa por
+producto físico y manda UNA vista previa por auto (análisis y publicación
+separados, sin toques intermedios). Tope 10 fotos / 5 productos por tanda
+(el resto queda con botón). Dedupe por update_id + waitUntil (tandas >60s).
+FALTA: prueba real en Telegram (fotos mezcladas de 2-3 autos distintos).
+PENDIENTE previo: 5 under_review (subir +20% y a Clásica al salir de revisión).
+Bot catalogador OPERATIVO · Webhook ACTIVO · cron OFF.
+Detalle: progress/CHECKPOINT.md · progress/log/2026-07-08.md · progress/STATE.json

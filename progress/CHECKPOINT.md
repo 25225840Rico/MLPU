@@ -1,57 +1,87 @@
 # CHECKPOINT — MLPU · Bot de Telegram = catalogador multi-operador
 
-**Última sesión:** 2026-07-03 (sesión 7) | **Commit:** ce3a59e (main, pusheado) |
-**Worker Version:** b67b83e1 | **Webhook:** ACTIVO | **Cron post-venta:** APAGADO
+**Última sesión:** 2026-07-10 (sesión 11) | **Commit:** ca12962 (main, pusheado) |
+**Worker Version:** fb6a8228 | **Webhook:** ACTIVO | **Cron post-venta:** APAGADO
 
-## Fase actual
-El bot dejó de ser (solo) post-venta y ahora es el **catalogador/publicador**
-que reemplaza al SPA "ML AutoPublisher": fotos por Telegram → IA → vista previa
-editable → publica en la cuenta ML del admin. Multi-operador (él + esposa) sobre
-UNA sola cuenta ML. Falta la prueba real de punta a punta.
+## Fase actual (NUEVO FRENTE: MLPU-Optimizer)
+Diseño CERRADO y plan LISTO — pendiente solo ARRANCAR la implementación.
+- Spec v1.0 aprobado: `optimizer/docs/2026-07-10-agente-optimizacion-ml-design.md`
+  (incluye apéndices DoD, riesgos, criterios salida DRY_RUN).
+- Plan F0+F1 (11 tareas TDD): `optimizer/docs/2026-07-10-optimizer-f0-f1.md`.
+- Todo el optimizador vive en subcarpeta única `optimizer/` (pedido del usuario).
+- Commits: 4c2754f (spec), 69e23fa (plan), f93a873 (reestructura). Sin push aún.
+**Próximo paso al retomar:** usuario elige ejecución (subagent-driven
+recomendada / inline) → ejecutar Task 1 del plan (crear D1 `mlpu-db` +
+esquema + binding). Resumen de decisiones también en HANDOFF.txt (1-7).
 
-## Completado en sesión 7 (2026-07-03)
-1. Chequeo general: notificaciones orders_v2 → KV FUNCIONAN (pendiente C de
-   sesión 6 cerrado por evidencia).
-2. Bot fuera de servicio (d813d66): webhook borrado + cron [] + action=off.
-   → Luego el webhook se REACTIVÓ para el catalogador (punto 5); cron sigue [].
-3. Inventario → envío pagado por el comprador: 106 directas + 3 previas.
-   40 rechazadas (envío gratis obligatorio ≥$19.990). De esas, 20 (≤$20.990)
-   rebajadas a $19.980 y liberadas (8 vía variations: item.price.not_modifiable).
-   Final: **129 pagado / 20 gratis** (las ≥$25.990, decisión del usuario).
-4. Stock a 1 por producto: 68/69 OK; MLC1986993239 (under_review) no se pudo
-   (reintentar al salir de revisión); 5 con stock 0 se dejaron en 0.
-   Excel `inventario_ML_2026-07-03.xlsx` en la raíz de automl (2 hojas).
-5. **Módulo catalogado** (ce3a59e): worker/publisher.js (puerto del SPA:
-   analyzeProduct 4×haiku, domain_discovery, atributos IA, precios mercado,
-   uploadPicture, createListing con free_shipping=false y qty=1 SIEMPRE) +
-   telegram-bot.js (fotos→catalogar por defecto, sticker tras botón 📦 Despacho,
-   preview con botones Publicar/Precio/Título/Categoría/Nuevo↔Usado, acceso
-   multi-operador: admin + KV chats:allowed con Aprobar/Rechazar, aviso al admin
-   cuando publica un operador). Verificado: node --check + webhook sintético.
+## Fase previa (bot catalogador)
+Bot catalogador OPERATIVO con flujo por lotes (fotos mezcladas → un Analizar →
+IA agrupa por producto → una preview por producto). NUEVA REGLA vigente desde
+esta sesión: **todas las publicaciones salen en la MÁXIMA categoría disponible
+(gold_pro Premium → gold_special Clásica → free) y SIEMPRE con envío pagado
+por el comprador** (regla fija, sin toggle).
+Sigue pendiente la prueba real del flujo por lotes en Telegram.
+
+## Completado en sesión 11 (2026-07-10)
+0. **INVENTARIO COMPLETO migrado (160 ítems, vía proxy /ml/ del Worker)**:
+   160/160 en Premium (gold_pro); envío por comprador en 109; en 51 ítems
+   (precio ≥ $19.990) ML FUERZA envío gratis y no se puede desactivar por
+   API (verificado re-leyendo cada ítem). Única falla: MLC1986993239
+   (under_review, no editable; ya era Premium). Excel nuevo:
+   `inventario_ML_2026-07-10.xlsx` (160 filas + Resumen). Detalle por ítem:
+   `progress/log/inventory-report-2026-07-10.json`.
+1. **worker/publisher.js**: `pickListingType` invertido — antes prefería lo
+   más barato (free primero), ahora gold_pro → gold_special → free; fallback
+   ante error de API: gold_pro. `createListing` fija
+   `shipping: { me2, free_shipping: false, local_pick_up: false }` (se
+   eliminó `draft.freeShipping`). `estimateProfit` ya no estima costo de
+   envío gratis (nunca aplica); net = precio − comisión.
+2. **worker/telegram-bot.js**: eliminado el callback `cat:ship:` y el botón
+   "Cambiar a envío gratis" de la preview; textos fijos "envío a cargo del
+   comprador"; preview muestra el tipo de publicación real (Premium/Clásica/
+   gratuita); ayuda actualizada.
+3. **src/App.jsx (SPA)**: `listingType` por defecto `gold_pro` en los 3
+   puntos (estado inicial, borrador nuevo, carga de borrador); el selector
+   manual Gratuita/Clásica/Premium sigue disponible. Build vite OK.
+4. Deploy Worker fb6a8228 verificado; commit ca12962 pusheado a main;
+   SAVE.txt actualizado.
 
 ## PRÓXIMO paso accionable
-1. Usuario debe RECHAZAR la solicitud de acceso del chat 999999999 (prueba mía).
-2. Prueba real: mandar fotos de un producto al bot → Analizar → Publicar.
-3. Alta esposa: ella manda /start → admin aprueba → prueba desde su celular.
-4. Si ML rechaza algo en la prueba real, ajustar payload en publisher.js.
+1. **Prueba real del flujo por lotes**: fotos mezcladas de 2-3 autos, un
+   Analizar, verificar separación + previews + publicaciones independientes,
+   y ahora también que salgan como **Premium** con envío por comprador.
+2. Pendientes previos: 5 under_review (subir +20% y pasar a la categoría
+   correspondiente al salir de revisión — la regla nueva dice Premium);
+   alta esposa; BRAND de MLC4146267638; verificar descripción en la próxima
+   publicación real.
 
-## Decisiones clave
-- Multi-OPERADOR, no multi-cuenta: todos publican en la cuenta ML del admin.
-- Toda publicación del bot: envío pagado por comprador + stock 1 (no editable).
-- Fotos sueltas = catalogar; despacho por sticker requiere botón 📦 Despacho.
-- Cron post-venta sigue apagado; el Worker sí recibe notificaciones orders_v2.
-- SPA queda como legacy en el repo (no borrar aún).
-- ML: 200 puede IGNORAR free_shipping en PUT — verificar el valor, no el status.
-- Items con variaciones: precio vía variations:[{id,price}], no PUT price.
+## Decisiones clave (vigentes)
+- **2026-07-10: listing_type = el MÁS caro disponible (Premium) y envío
+  SIEMPRE pagado por el comprador, sin toggle** (reemplaza "más barato").
+- Lotes: álbum = producto; fotos sueltas se agrupan hasta cierre explícito.
+- Fotos en claves KV individuales (nunca read-modify-write compartido).
+- Multi-OPERADOR, no multi-cuenta; stock default 1 editable; descripciones
+  plain text sanitizadas.
+- Cron post-venta apagado; Worker sí recibe orders_v2.
 
 ## Bloqueos
-- 20 publicaciones ≥$25.990 con envío gratis obligatorio (regla ML, sin palanca
-  salvo bajar precio). 1 item under_review con stock 3.
+- PR #1 (cotizador-costos) sigue esperando URL+anon-key Supabase.
+- CERRADO SIN SALIDA (2026-07-10): envío gratis obligatorio ≥ $19.990 en
+  MLC — probado en vivo: modo custom y "a acordar" ignorados (200 y
+  revierte), Clásica también forzada, downgrade a 'free' bloqueado (400),
+  y costo vendedor $6.300 igual en Clásica y Premium. Los 51 ítems quedan
+  Premium + envío gratis; única salida = precio < $19.990 (a $19.989 se
+  libera, verificado). Los 2 ítems que estaban justo en $19.990 se bajaron
+  a $19.989 → Premium + envío por comprador (111/160). Quedan 49 forzados
+  (precio > $19.990). Detalle: log/2026-07-10.md partes 3-4.
+- Riesgo menor: KV list eventualmente consistente (conteo de fotos puede
+  quedar corto si Analizar entra en el mismo segundo que la última foto).
 
 ## Datos de entorno
 - Repo https://github.com/25225840Rico/MLPU (main) · código worker/.
-- Worker https://mlpu-proxy.aronricocl.workers.dev · Version b67b83e1.
-- KV: ML_TOKENS 1f6324c3659d4388bec284825c2864be (ml_session) ·
-  ML_ORDERS d72bf35159b54eabadffafc521c1562b (+ chats:allowed, pending:<chat>).
+- Worker https://mlpu-proxy.aronricocl.workers.dev · Version fb6a8228.
+- KV: ML_TOKENS 1f6324c3659d4388bec284825c2864be · ML_ORDERS
+  d72bf35159b54eabadffafc521c1562b (chats:allowed, pending:<chat>,
+  lotp:/lotd:/lotm:/lotcur: por lote).
 - Bot t.me/Pulicadorlibre_bot · admin chat 1036420688 · seller 283388639 ·
   GUAR8622673 · MLC. Secrets: ANTHROPIC_API_KEY, ML_CLIENT_*, TELEGRAM_*.
