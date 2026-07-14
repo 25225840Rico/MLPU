@@ -6,6 +6,8 @@ compatibility_date = "2024-01-01"
 [vars]
 SELLER_ID = "283388639"
 ML_SITE_ID = "MLC"
+# IG User ID de la cuenta Business (se obtiene en la puesta en marcha, Task 7).
+IG_USER_ID = "PENDIENTE_TASK_7"
 
 # KV: almacena la sesión OAuth de ML (access_token + refresh_token).
 # Crear con:  wrangler kv namespace create ML_TOKENS
@@ -25,10 +27,10 @@ binding = "DB"
 database_name = "mlpu-db"
 database_id = "5145a70c-1c25-4904-a63a-4021b3bd19db"
 
-# Cron Trigger DESACTIVADO (bot fuera de servicio 2026-07-03).
-# Para reactivar el scheduler, restaurar: crons = ["*/10 * * * *"]
+# Crons de MLPU-Instagram. El scheduler post-venta sigue APAGADO
+# (scheduled() ya no lo invoca; ver index.js).
 [triggers]
-crons = []
+crons = ["*/30 * * * *", "0 10 * * *"]
 
 # Secrets (NO van aquí, configurar con):
 #   wrangler secret put ML_CLIENT_ID

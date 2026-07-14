@@ -19,9 +19,9 @@
  *   - Secrets: ML_CLIENT_ID, ML_CLIENT_SECRET
  */
 
-import { handleTelegramWebhook } from './telegram-bot.js'
+import { handleTelegramWebhook, tgSend } from './telegram-bot.js'
 import { recordOrderFromML } from './orders.js'
-import { runScheduled } from './scheduler.js'
+import { runIgPublisher, runIgDaily } from './ig-queue.js'
 import { mlFetch } from './ml-fetch.js'
 import { runCatchup } from './backfill.js'
 
@@ -391,8 +391,12 @@ export default {
     }
   },
 
-  // Cron Trigger (cada 6 h): seguimiento automático de envíos (Paso 4).
+  // Crons: '*/30 * * * *' publica la cola de IG dentro de ventanas óptimas;
+  // '0 10 * * *' (06:00 Chile) recalcula ventanas y renueva token de Meta.
+  // OJO: el post-venta (runScheduled de scheduler.js) sigue APAGADO adrede.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runScheduled(env))
+    const notify = t => tgSend(env, env.TELEGRAM_CHAT_ID, t)
+    if (event.cron === '0 10 * * *') ctx.waitUntil(runIgDaily(env, notify))
+    else ctx.waitUntil(runIgPublisher(env, { notify }))
   },
 }
