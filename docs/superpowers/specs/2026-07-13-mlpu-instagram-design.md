@@ -42,8 +42,10 @@ ig_media_id, ig_story_id`.
 Una vez al día lee de la Graph API la métrica de seguidores conectados por hora
 (`online_followers`, permiso `instagram_manage_insights`) y guarda en D1
 (tabla `ig_config`) las **2 mejores ventanas** del día. Si la API no entrega datos
-(cuenta chica, métrica no disponible), usa el fallback configurable. Las ventanas
-y el fallback se pueden ver/cambiar por comando de Telegram.
+(cuenta chica, métrica no disponible), usa el fallback configurable. Una **ventana**
+es un bloque de 60 minutos que inicia a la hora elegida (ej: ventana 20:00 =
+20:00–20:59; el cron de 30 min la pilla sí o sí). Las ventanas y el fallback se
+pueden ver/cambiar por comando de Telegram.
 
 **3. Publicador (cron cada 30 min)**
 Si la hora actual (zona América/Santiago) cae dentro de una ventana óptima y hay
