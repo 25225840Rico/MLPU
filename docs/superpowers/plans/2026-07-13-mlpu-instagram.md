@@ -564,6 +564,7 @@ git commit -m "feat(ig): cliente Graph API (publicar, insights, renovación de t
   - `getVentanas(env): Promise<{ horas: string[], origen: string }>` — prioridad `ventanas_manual` > `ventanas` (insights) > fallback.
   - `runIgPublisher(env, { force = false, now = new Date(), notify = async () => {}, deps } = {}): Promise<{ publicados: number }>`
   - `runIgDaily(env, notify): Promise<void>`
+  - `enqueueStock(env, deps = {}): Promise<{ total: number, encolados: number }>` — carga inicial: pagina `users/{SELLER_ID}/items/search?status=active`, multiget `items?ids=...` (de a 20) y hace INSERT OR IGNORE de cada activo; devuelve cuántos encoló de nuevo.
   - `deps` (para tests): `{ publishImage, getItem }`. `getItem(env, mlItemId)` por defecto usa `getValidAccessToken` (de `./index.js`) + `mlFetch` (de `./ml-fetch.js`) contra `https://api.mercadolibre.com/items/{id}` y devuelve el JSON del ítem. El import de `./index.js` es un ciclo aceptado: `scheduler.js` ya usa el mismo patrón.
 
 - [ ] **Step 1: Tests que fallan**
@@ -765,6 +766,36 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
   return { publicados }
 }
 
+// Carga inicial: encola todo el inventario activo de ML que no esté ya en la
+// cola (o publicado). La cola lo gotea a MAX_POR_VENTANA por ventana.
+export async function enqueueStock(env, deps = {}) {
+  const getToken = deps.getToken || (() => getValidAccessToken(env))
+  const doFetch  = deps.mlFetch  || mlFetch
+  const token = await getToken()
+  const auth = { headers: { Authorization: `Bearer ${token}` } }
+  const ids = []
+  for (let offset = 0; ; offset += 50) {
+    const r = await doFetch(`https://api.mercadolibre.com/users/${env.SELLER_ID}/items/search?status=active&limit=50&offset=${offset}`, auth)
+    const data = await r.json()
+    ids.push(...(data.results || []))
+    if (ids.length >= (data.paging?.total || 0) || !(data.results || []).length) break
+  }
+  let encolados = 0
+  for (let i = 0; i < ids.length; i += 20) {
+    const r = await doFetch(`https://api.mercadolibre.com/items?ids=${ids.slice(i, i + 20).join(',')}&attributes=id,title,price,permalink,status`, auth)
+    const lote = await r.json()
+    for (const it of Array.isArray(lote) ? lote : []) {
+      const b = it.body
+      if (b?.status !== 'active') continue
+      const res = await env.DB.prepare(
+        'INSERT OR IGNORE INTO ig_queue (ml_item_id, titulo, precio, permalink_ml) VALUES (?, ?, ?, ?)')
+        .bind(b.id, b.title, Math.round(Number(b.price)) || 0, b.permalink || null).run()
+      encolados += (res.meta?.changes ?? 1)
+    }
+  }
+  return { total: ids.length, encolados }
+}
+
 export async function runIgDaily(env, notify = async () => {}) {
   try {
     const hourly = await fetchOnlineFollowers(env)
@@ -818,7 +849,7 @@ Sin unit tests propios (es cableado sobre módulos ya testeados); la verificaci�
 Al inicio de `worker/telegram-bot.js`, junto a los imports existentes:
 
 ```js
-import { enqueueIg, listPendientes, quitarDeCola, getVentanas, runIgPublisher } from './ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, getVentanas, runIgPublisher } from './ig-queue.js'
 import { fmtCLP } from './ig-logic.js'
 ```
 
@@ -865,6 +896,11 @@ async function handleIgCommand(env, chatId, args) {
     const lines = rows.map((r, i) =>
       `${i + 1}. <code>${r.id}</code> ${esc(r.titulo)} — ${fmtCLP(r.precio)}${r.intentos ? ` (${r.intentos} intento/s fallido/s)` : ''}`)
     return tgSend(env, chatId, `📸 <b>Cola de Instagram (${rows.length})</b>\n\n${lines.join('\n')}\n\nQuitar: /ig quitar &lt;id&gt; · Publicar ya: /ig ahora`)
+  }
+  if (sub === 'stock') {
+    await tgSend(env, chatId, '⏳ Revisando el inventario activo en ML…')
+    const r = await enqueueStock(env)
+    return tgSend(env, chatId, `📦 Inventario: ${r.total} activos en ML, <b>${r.encolados} encolados nuevos</b> para IG (a ~6/día en horas punta). Mirá /ig cola.`)
   }
   if (sub === 'quitar') {
     const ok = await quitarDeCola(env, rest[0])

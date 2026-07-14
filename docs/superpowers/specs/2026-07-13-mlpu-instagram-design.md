@@ -68,6 +68,10 @@ filas `pendiente`:
   práctica; no se implementa contador propio (YAGNI).
 
 **5. Comandos de Telegram (en `worker/telegram-bot.js`)**
+- `/ig stock` — **carga inicial (agregado 2026-07-13)**: encola todo el
+  inventario ACTIVO ya publicado en ML (~160 ítems) que no esté ya en la cola
+  o publicado. Con el tope de 3 por ventana × 2 ventanas, la cola gotea ~6
+  publicaciones/día (≈1 mes de contenido) sin inundar el perfil.
 - `/ig cola` — lista pendientes con posición.
 - `/ig quitar <n>` — saca un producto de la cola.
 - `/ig ahora` — fuerza publicar los pendientes ya, ignorando la ventana.
