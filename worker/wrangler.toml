@@ -19,6 +19,12 @@ id = "1f6324c3659d4388bec284825c2864be"
 binding = "ML_ORDERS"
 id = "d72bf35159b54eabadffafc521c1562b"
 
+# D1: cola y config de Instagram (MLPU-Instagram).
+[[d1_databases]]
+binding = "DB"
+database_name = "mlpu-db"
+database_id = "5145a70c-1c25-4904-a63a-4021b3bd19db"
+
 # Cron Trigger DESACTIVADO (bot fuera de servicio 2026-07-03).
 # Para reactivar el scheduler, restaurar: crons = ["*/10 * * * *"]
 [triggers]
