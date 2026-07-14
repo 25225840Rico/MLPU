@@ -22,6 +22,8 @@ import {
   analyzeProduct, clusterPhotos, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
   getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, getVentanas, runIgPublisher } from './ig-queue.js'
+import { fmtCLP } from './ig-logic.js'
 
 const TG_API = 'https://api.telegram.org'
 const log    = (...a) => console.log('[ML-BOT]', ...a)
@@ -267,6 +269,8 @@ async function handleTextCommand(env, msg) {
     return doAssign(env, chatId, orderId, p.tracking_number)
   }
 
+  if (text === '/ig' || text.startsWith('/ig ')) return handleIgCommand(env, chatId, text.slice(3).trim())
+
   if (text === '/ordenes')    return sendOrdersList(env, chatId)
   if (text === '/pendientes') return sendPendingList(env, chatId)
   if (text.startsWith('/orden ')) return sendOrderDetail(env, chatId, text.slice('/orden '.length).trim().split(/\s+/)[0])
@@ -319,7 +323,8 @@ async function sendStart(env, chatId) {
     'las agrupa por producto y cada uno se analiza y publica por separado.\n\n' +
     '📦 Despacho — foto del sticker para asignar tracking.\n' +
     '🧾 Órdenes · 📋 Historial — ventas reales de ML.\n' +
-    '💬 Mensajes — directo, conversación y plantillas.\n\n' +
+    '💬 Mensajes — directo, conversación y plantillas.\n' +
+    '📸 /ig — cola y horarios de Instagram (stock, cola, quitar, ahora, horas).\n\n' +
     '🔑 Si se corta la conexión con ML, te aviso por acá y reconectás pegando el código.',
     { reply_markup: MAIN_KB })
 }
@@ -383,6 +388,52 @@ async function doFinalize(env, chatId) {
   const p = await getPending(env, chatId)
   if (p?.mode !== 'collect_evidence') return tgSend(env, chatId, 'No hay un envío en curso. Mandá la foto del sticker para empezar.')
   return finalizeEvidence(env, chatId, p)
+}
+
+// ── Instagram: cola y ventanas ─────────────────────────────────
+async function handleIgCommand(env, chatId, args) {
+  const notify = t => tgSend(env, chatId, t)
+  const [sub, ...rest] = args.split(/\s+/).filter(Boolean)
+
+  if (sub === 'cola' || !sub) {
+    const rows = await listPendientes(env)
+    if (!rows.length) return tgSend(env, chatId, '📭 La cola de Instagram está vacía. Cargar inventario: /ig stock')
+    const lines = rows.map((r, i) =>
+      `${i + 1}. <code>${r.id}</code> ${esc(r.titulo)} — ${fmtCLP(r.precio)}${r.intentos ? ` (${r.intentos} intento/s fallido/s)` : ''}`)
+    return tgSend(env, chatId, `📸 <b>Cola de Instagram (${rows.length})</b>\n\n${lines.join('\n')}\n\nQuitar: /ig quitar &lt;id&gt; · Publicar ya: /ig ahora`)
+  }
+  if (sub === 'stock') {
+    await tgSend(env, chatId, '⏳ Revisando el inventario activo en ML…')
+    let r
+    try { r = await enqueueStock(env) } catch (e) { return tgSend(env, chatId, `❌ No pude leer el inventario de ML: ${esc(e.message)}`) }
+    return tgSend(env, chatId, `📦 Inventario: ${r.total} activos en ML, <b>${r.encolados} encolados nuevos</b> para IG (salen a ~6/día en horas punta). Mirá /ig cola.`)
+  }
+  if (sub === 'quitar') {
+    const ok = await quitarDeCola(env, rest[0])
+    return tgSend(env, chatId, ok ? `🗑 Quitado de la cola (id ${esc(rest[0] || '')}).` : `No encontré el id ${esc(rest[0] || '¿?')} pendiente. Mirá /ig cola.`)
+  }
+  if (sub === 'ahora') {
+    await tgSend(env, chatId, '⏳ Publicando la cola de Instagram ya…')
+    let r
+    try { r = await runIgPublisher(env, { force: true, notify }) } catch (e) { return tgSend(env, chatId, `❌ IG falló: ${esc(e.message)}`) }
+    return tgSend(env, chatId, r.publicados ? `✅ Publiqué ${r.publicados} producto(s) en IG.` : 'No había nada publicable en la cola.')
+  }
+  if (sub === 'horas') {
+    if (rest[0] === 'auto') {
+      await env.DB.prepare("DELETE FROM ig_config WHERE clave='ventanas_manual'").run()
+      return tgSend(env, chatId, '🕐 Ventanas en modo automático (insights de IG, fallback 12:30/20:00).')
+    }
+    if (rest.length) {
+      const horas = rest.filter(h => /^\d{1,2}:\d{2}$/.test(h))
+      if (!horas.length) return tgSend(env, chatId, 'Formato: /ig horas 12:30 20:00 (o "/ig horas auto")')
+      await env.DB.prepare('REPLACE INTO ig_config (clave, valor) VALUES (?, ?)')
+        .bind('ventanas_manual', JSON.stringify({ horas })).run()
+      return tgSend(env, chatId, `🕐 Ventanas manuales fijadas: ${horas.join(', ')} (hora de Chile). Volver a automático: /ig horas auto`)
+    }
+    const v = await getVentanas(env)
+    return tgSend(env, chatId, `🕐 Ventanas vigentes: <b>${v.horas.join(', ')}</b> (origen: ${v.origen}).\nCambiar: /ig horas 12:30 20:00 · Automático: /ig horas auto`)
+  }
+  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig ahora · /ig horas')
 }
 
 async function sendOrdersList(env, chatId) {
@@ -1372,12 +1423,21 @@ async function runCatalogPublish(env, chatId, lotId) {
   }
 
   await deleteLot(env, chatId, lotId)
+
+  // Encolar para Instagram (spec MLPU-Instagram): sale en la próxima ventana óptima.
+  let igEncolado = false
+  try {
+    await enqueueIg(env, { mlItemId: item.id, titulo: d.title, precio: d.price, permalink: item.permalink })
+    igEncolado = true
+  } catch (e) { logErr('ig enqueue:', e.message) }
+
   await tgSend(env, chatId, [
     '🎉 <b>¡Publicado!</b>',
     `📌 ${esc(d.title)}`,
     `💲 ${fmtMoney(d.price, 'CLP')} · 🚚 envío a cargo del comprador · stock ${d.qty || 1}`,
     `🔗 ${item.permalink || item.id}`,
-  ].join('\n'), { reply_markup: MAIN_KB })
+    igEncolado ? '📸 En cola para Instagram (sale en la próxima hora punta) · /ig cola' : null,
+  ].filter(Boolean).join('\n'), { reply_markup: MAIN_KB })
 
   // Aviso al admin cuando publica un operador.
   if (String(chatId) !== String(env.TELEGRAM_CHAT_ID)) {
