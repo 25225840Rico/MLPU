@@ -63,8 +63,9 @@ filas `pendiente`:
 - Fallo de la API de IG → `intentos++`, queda `pendiente` para la próxima ventana.
 - Al **3er fallo** → estado `error` y aviso por Telegram con el motivo.
 - Éxito → aviso por Telegram: "📸 Subido a IG: {título} (feed + historia)".
-- Respeto del límite de la API (50 publicaciones/24 h): con tope 3×2 ventanas
-  jamás se alcanza; igual se cuenta y se frena si se acercara.
+- Límite de la API (50 publicaciones/24 h): el tope estructural de 3 productos
+  por corrida (2 ventanas/día + `/ig ahora` manual) lo hace inalcanzable en la
+  práctica; no se implementa contador propio (YAGNI).
 
 **5. Comandos de Telegram (en `worker/telegram-bot.js`)**
 - `/ig cola` — lista pendientes con posición.
