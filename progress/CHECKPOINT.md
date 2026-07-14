@@ -1,87 +1,58 @@
-# CHECKPOINT — MLPU · Bot de Telegram = catalogador multi-operador
+# CHECKPOINT — MLPU
 
-**Última sesión:** 2026-07-10 (sesión 11) | **Commit:** ca12962 (main, pusheado) |
-**Worker Version:** fb6a8228 | **Webhook:** ACTIVO | **Cron post-venta:** APAGADO
+**Última sesión:** 2026-07-14 | **Rama:** feature/mlpu-instagram (commit 8b50be0) |
+**Worker Version:** 09ff897e | **Webhook:** ACTIVO | **Crons:** */30 (IG publisher) + 0 10 UTC (IG daily)
 
-## Fase actual (NUEVO FRENTE: MLPU-Optimizer)
-Diseño CERRADO y plan LISTO — pendiente solo ARRANCAR la implementación.
-- Spec v1.0 aprobado: `optimizer/docs/2026-07-10-agente-optimizacion-ml-design.md`
-  (incluye apéndices DoD, riesgos, criterios salida DRY_RUN).
-- Plan F0+F1 (11 tareas TDD): `optimizer/docs/2026-07-10-optimizer-f0-f1.md`.
-- Todo el optimizador vive en subcarpeta única `optimizer/` (pedido del usuario).
-- Commits: 4c2754f (spec), 69e23fa (plan), f93a873 (reestructura). Sin push aún.
-**Próximo paso al retomar:** usuario elige ejecución (subagent-driven
-recomendada / inline) → ejecutar Task 1 del plan (crear D1 `mlpu-db` +
-esquema + binding). Resumen de decisiones también en HANDOFF.txt (1-7).
+## Fase actual: MLPU-INSTAGRAM — código COMPLETO y DESPLEGADO
+Falta SOLO la Task 7 (setup Meta con el usuario + prueba real).
+- Spec: `docs/superpowers/specs/2026-07-13-mlpu-instagram-design.md`
+- Plan: `docs/superpowers/plans/2026-07-13-mlpu-instagram.md` (Tasks 1-6 hechas)
+- 22/22 tests (`npm test`, runner node --test nuevo en package.json).
 
-## Fase previa (bot catalogador)
-Bot catalogador OPERATIVO con flujo por lotes (fotos mezcladas → un Analizar →
-IA agrupa por producto → una preview por producto). NUEVA REGLA vigente desde
-esta sesión: **todas las publicaciones salen en la MÁXIMA categoría disponible
-(gold_pro Premium → gold_special Clásica → free) y SIEMPRE con envío pagado
-por el comprador** (regla fija, sin toggle).
-Sigue pendiente la prueba real del flujo por lotes en Telegram.
+## Qué hace
+Cola en D1 `mlpu-db` (id 5145a70c-1c25-4904-a63a-4021b3bd19db, binding env.DB,
+tablas ig_queue/ig_config). Al publicar por bot se encola; cron cada 30 min
+publica feed+historia en IG dentro de ventanas óptimas (insights de IG vía
+online_followers, fallback 12:30/20:00 Chile), máx 3 por ventana, 1 corrida por
+ventana, 3 reintentos → error + aviso Telegram. Cron diario 10:00 UTC recalcula
+ventanas y renueva token Meta (>45 días). Verifica ítem activo en ML antes de
+publicar (si no → cancelado). Comandos: /ig stock (encola inventario activo ML,
+~160 ítems, gotea ~6/día) · /ig cola · /ig quitar <id> · /ig ahora · /ig horas
+[HH:MM…|auto]. Post-venta (runScheduled) sigue APAGADO adrede: scheduled() solo
+rutea crons de IG.
 
-## Completado en sesión 11 (2026-07-10)
-0. **INVENTARIO COMPLETO migrado (160 ítems, vía proxy /ml/ del Worker)**:
-   160/160 en Premium (gold_pro); envío por comprador en 109; en 51 ítems
-   (precio ≥ $19.990) ML FUERZA envío gratis y no se puede desactivar por
-   API (verificado re-leyendo cada ítem). Única falla: MLC1986993239
-   (under_review, no editable; ya era Premium). Excel nuevo:
-   `inventario_ML_2026-07-10.xlsx` (160 filas + Resumen). Detalle por ítem:
-   `progress/log/inventory-report-2026-07-10.json`.
-1. **worker/publisher.js**: `pickListingType` invertido — antes prefería lo
-   más barato (free primero), ahora gold_pro → gold_special → free; fallback
-   ante error de API: gold_pro. `createListing` fija
-   `shipping: { me2, free_shipping: false, local_pick_up: false }` (se
-   eliminó `draft.freeShipping`). `estimateProfit` ya no estima costo de
-   envío gratis (nunca aplica); net = precio − comisión.
-2. **worker/telegram-bot.js**: eliminado el callback `cat:ship:` y el botón
-   "Cambiar a envío gratis" de la preview; textos fijos "envío a cargo del
-   comprador"; preview muestra el tipo de publicación real (Premium/Clásica/
-   gratuita); ayuda actualizada.
-3. **src/App.jsx (SPA)**: `listingType` por defecto `gold_pro` en los 3
-   puntos (estado inicial, borrador nuevo, carga de borrador); el selector
-   manual Gratuita/Clásica/Premium sigue disponible. Build vite OK.
-4. Deploy Worker fb6a8228 verificado; commit ca12962 pusheado a main;
-   SAVE.txt actualizado.
+## Archivos nuevos/tocados
+worker/ig-logic.js, ig-api.js, ig-queue.js, schema-ig.sql,
+worker/test/{smoke,ig-logic,ig-api,ig-queue}.test.js + fake-db.js,
+telegram-bot.js (enqueue en runCatalogPublish + handleIgCommand),
+index.js (scheduled rutea por event.cron), wrangler.toml (D1, crons, IG_USER_ID).
 
-## PRÓXIMO paso accionable
-1. **Prueba real del flujo por lotes**: fotos mezcladas de 2-3 autos, un
-   Analizar, verificar separación + previews + publicaciones independientes,
-   y ahora también que salgan como **Premium** con envío por comprador.
-2. Pendientes previos: 5 under_review (subir +20% y pasar a la categoría
-   correspondiente al salir de revisión — la regla nueva dice Premium);
-   alta esposa; BRAND de MLC4146267638; verificar descripción en la próxima
-   publicación real.
+## PRÓXIMO paso accionable (Task 7, con el usuario — app Meta YA creada)
+1. Pedir App ID + App Secret → `wrangler secret put META_APP_ID` / `META_APP_SECRET`.
+2. Graph API Explorer: permisos instagram_basic, instagram_content_publish,
+   instagram_manage_insights, pages_show_list, pages_read_engagement →
+   GET /me/accounts → page id → GET /{page-id}?fields=instagram_business_account
+   = IG_USER_ID; canjear token corto por largo (fb_exchange_token).
+3. IG_USER_ID real en wrangler.toml (reemplaza PENDIENTE_TASK_7) + redeploy;
+   sembrar token: REPLACE INTO ig_config ('meta_token','{"token":"…","obtenido_en":"…"}')
+   vía `wrangler d1 execute mlpu-db --remote`.
+4. Prueba real: /ig stock → /ig cola → /ig ahora → verificar feed+historia en la
+   cuenta IG y avisos en Telegram. Si IG rechaza imagen por proporción → activar
+   contingencia padding WASM (spec).
+5. Al cerrar: superpowers:finishing-a-development-branch (merge a main), SAVE.txt.
 
-## Decisiones clave (vigentes)
-- **2026-07-10: listing_type = el MÁS caro disponible (Premium) y envío
-  SIEMPRE pagado por el comprador, sin toggle** (reemplaza "más barato").
-- Lotes: álbum = producto; fotos sueltas se agrupan hasta cierre explícito.
-- Fotos en claves KV individuales (nunca read-modify-write compartido).
-- Multi-OPERADOR, no multi-cuenta; stock default 1 editable; descripciones
-  plain text sanitizadas.
-- Cron post-venta apagado; Worker sí recibe orders_v2.
+## Decisiones clave de esta fase
+- Prioridad del usuario: IG primero con stock ML existente; TIENDA WEB después
+  (decidido: Worker+D1, MercadoPago Checkout Pro + Webpay Plus, sync bidireccional,
+  catálogo en su dominio → nameservers a Cloudflare); OPTIMIZER CONGELADO
+  (docs intactos en optimizer/docs/; la D1 mlpu-db nació aquí).
+- Token Meta vive en D1 (Worker no escribe secrets); renovación automática.
+- Foto tal cual (URL pública de ML), precio en caption; padding solo si IG rechaza.
+- Import dinámico de index.js en ig-queue para no arrastrar el worker a los tests.
 
 ## Bloqueos
-- PR #1 (cotizador-costos) sigue esperando URL+anon-key Supabase.
-- CERRADO SIN SALIDA (2026-07-10): envío gratis obligatorio ≥ $19.990 en
-  MLC — probado en vivo: modo custom y "a acordar" ignorados (200 y
-  revierte), Clásica también forzada, downgrade a 'free' bloqueado (400),
-  y costo vendedor $6.300 igual en Clásica y Premium. Los 51 ítems quedan
-  Premium + envío gratis; única salida = precio < $19.990 (a $19.989 se
-  libera, verificado). Los 2 ítems que estaban justo en $19.990 se bajaron
-  a $19.989 → Premium + envío por comprador (111/160). Quedan 49 forzados
-  (precio > $19.990). Detalle: log/2026-07-10.md partes 3-4.
-- Riesgo menor: KV list eventualmente consistente (conteo de fotos puede
-  quedar corto si Analizar entra en el mismo segundo que la última foto).
+- Task 7 necesita al usuario: App ID/Secret y generar token (app Meta ya creada).
 
-## Datos de entorno
-- Repo https://github.com/25225840Rico/MLPU (main) · código worker/.
-- Worker https://mlpu-proxy.aronricocl.workers.dev · Version fb6a8228.
-- KV: ML_TOKENS 1f6324c3659d4388bec284825c2864be · ML_ORDERS
-  d72bf35159b54eabadffafc521c1562b (chats:allowed, pending:<chat>,
-  lotp:/lotd:/lotm:/lotcur: por lote).
-- Bot t.me/Pulicadorlibre_bot · admin chat 1036420688 · seller 283388639 ·
-  GUAR8622673 · MLC. Secrets: ANTHROPIC_API_KEY, ML_CLIENT_*, TELEGRAM_*.
+## Pendientes heredados (fase bot catalogador)
+- Prueba real flujo por lotes; 5 under_review (+20% al salir); alta esposa;
+  BRAND de MLC4146267638; verificar descripción en próxima publicación real.
