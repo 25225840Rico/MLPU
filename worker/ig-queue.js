@@ -39,6 +39,12 @@ export async function quitarDeCola(env, id) {
   return (r.meta?.changes ?? 0) > 0
 }
 
+export async function vaciarCola(env) {
+  const r = await env.DB.prepare(
+    "UPDATE ig_queue SET estado='cancelado' WHERE estado='pendiente'").run()
+  return r.meta?.changes ?? 0
+}
+
 export async function getVentanas(env) {
   const manual = await getConfig(env.DB, 'ventanas_manual')
   if (manual?.horas?.length) return { horas: manual.horas, origen: 'manual' }
@@ -144,7 +150,9 @@ export async function enqueueStock(env, deps = {}) {
       const b = it.body
       if (b?.status !== 'active') continue
       const res = await env.DB.prepare(
-        'INSERT OR IGNORE INTO ig_queue (ml_item_id, titulo, precio, permalink_ml) VALUES (?, ?, ?, ?)')
+        `INSERT INTO ig_queue (ml_item_id, titulo, precio, permalink_ml) VALUES (?, ?, ?, ?)
+         ON CONFLICT(ml_item_id) DO UPDATE SET estado='pendiente', intentos=0, ultimo_error=NULL
+         WHERE ig_queue.estado='cancelado'`)
         .bind(b.id, b.title, Math.round(Number(b.price)) || 0, b.permalink || null).run()
       encolados += (res.meta?.changes ?? 0)
     }

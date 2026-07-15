@@ -17,7 +17,13 @@ export class FakeDB {
 function makeStmt(db, sql, args) {
   const run = async () => {
     let changes = 0
-    if (sql.includes('INSERT OR IGNORE INTO ig_queue')) {
+    if (sql.includes('ON CONFLICT(ml_item_id)')) {
+      const [ml_item_id, titulo, precio, permalink_ml] = args
+      const row = db.queue.find(r => r.ml_item_id === ml_item_id)
+      if (!row) { db.seedQueue({ ml_item_id, titulo, precio, permalink_ml, creado_en: new Date().toISOString() }); changes = 1 }
+      else if (row.estado === 'cancelado') { Object.assign(row, { estado: 'pendiente', intentos: 0, ultimo_error: null }); changes = 1 }
+      return { success: true, meta: { changes } }
+    } else if (sql.includes('INSERT OR IGNORE INTO ig_queue')) {
       const [ml_item_id, titulo, precio, permalink_ml] = args
       if (!db.queue.some(r => r.ml_item_id === ml_item_id)) {
         db.seedQueue({ ml_item_id, titulo, precio, permalink_ml, creado_en: new Date().toISOString() })
@@ -28,6 +34,8 @@ function makeStmt(db, sql, args) {
     } else if (sql.includes('DELETE FROM ig_config')) {
       const clave = sql.match(/clave='([^']+)'/)?.[1] ?? args[0]
       changes = db.config.delete(clave) ? 1 : 0
+    } else if (sql.includes('UPDATE ig_queue') && sql.includes("WHERE estado='pendiente'") && !args.length) {
+      for (const r of db.queue) if (r.estado === 'pendiente') { r.estado = 'cancelado'; changes++ }
     } else if (sql.includes('UPDATE ig_queue')) {
       const id = args[args.length - 1]
       const row = db.queue.find(r => r.id === id)

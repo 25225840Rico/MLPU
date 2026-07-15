@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, getVentanas, runIgPublisher, isPausado, setPausado } from '../ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado } from '../ig-queue.js'
 import { FakeDB } from './fake-db.js'
 
 const mkEnv = () => ({ DB: new FakeDB(), IG_USER_ID: 'IGU', TELEGRAM_CHAT_ID: '1', SELLER_ID: '283388639' })
@@ -137,4 +137,28 @@ test('setPausado(false) reanuda', async () => {
   await setPausado(env, true)
   await setPausado(env, false)
   assert.equal(await isPausado(env), false)
+})
+
+test('vaciarCola: cancela todos los pendientes y devuelve el conteo', async () => {
+  const env = { DB: new FakeDB() }
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1 })
+  env.DB.seedQueue({ ml_item_id: 'MLC2', titulo: 'B', precio: 2 })
+  env.DB.seedQueue({ ml_item_id: 'MLC3', titulo: 'C', precio: 3, estado: 'publicado' })
+  assert.equal(await vaciarCola(env), 2)
+  assert.ok(env.DB.queue.every(r => r.ml_item_id === 'MLC3' ? r.estado === 'publicado' : r.estado === 'cancelado'))
+})
+
+test('enqueueStock: re-encola ítems cancelados (UPSERT), no los publicados', async () => {
+  const env = { DB: new FakeDB(), SELLER_ID: 'S1' }
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1, estado: 'cancelado', intentos: 2, ultimo_error: 'x' })
+  env.DB.seedQueue({ ml_item_id: 'MLC2', titulo: 'B', precio: 2, estado: 'publicado' })
+  const pages = [{ results: ['MLC1', 'MLC2'], paging: { total: 2 } }]
+  const detail = [{ body: { id: 'MLC1', title: 'A', price: 1, permalink: 'https://x/1', status: 'active' } },
+                  { body: { id: 'MLC2', title: 'B', price: 2, permalink: 'https://x/2', status: 'active' } }]
+  const fakeFetch = async (url) => ({ json: async () => url.includes('/items/search') ? pages[0] : detail })
+  const r = await enqueueStock(env, { getToken: async () => 'T', mlFetch: fakeFetch })
+  assert.equal(r.encolados, 1) // solo MLC1 (cancelado→pendiente); MLC2 publicado queda intacto
+  const row = env.DB.queue.find(x => x.ml_item_id === 'MLC1')
+  assert.equal(row.estado, 'pendiente'); assert.equal(row.intentos, 0); assert.equal(row.ultimo_error, null)
+  assert.equal(env.DB.queue.find(x => x.ml_item_id === 'MLC2').estado, 'publicado')
 })

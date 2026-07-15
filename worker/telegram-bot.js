@@ -22,7 +22,7 @@ import {
   analyzeProduct, clusterPhotos, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
   getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, getVentanas, runIgPublisher, isPausado, setPausado } from './ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado } from './ig-queue.js'
 import { fmtCLP } from './ig-logic.js'
 
 const TG_API = 'https://api.telegram.org'
@@ -423,6 +423,12 @@ async function handleIgCommand(env, chatId, args) {
   if (sub === 'parar') {
     await setPausado(env, true)
     return tgSend(env, chatId, '⏸ Publicación en Instagram PAUSADA (los crons no suben nada). Reanudar: /ig seguir · Vaciar la cola: /ig vaciar')
+  }
+  if (sub === 'vaciar') {
+    const n = await vaciarCola(env)
+    return tgSend(env, chatId, n
+      ? `🗑 Cola vaciada: ${n} publicación(es) pendiente(s) canceladas. Re-encolar el inventario: /ig stock`
+      : 'La cola ya estaba vacía.')
   }
   if (sub === 'seguir') {
     await setPausado(env, false)
