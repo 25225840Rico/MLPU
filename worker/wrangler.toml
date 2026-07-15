@@ -8,6 +8,7 @@ SELLER_ID = "283388639"
 ML_SITE_ID = "MLC"
 # IG User ID de la cuenta Business (se obtiene en la puesta en marcha, Task 7).
 IG_USER_ID = "17841476463162844"
+PUBLIC_URL = "https://mlpu-proxy.aronricocl.workers.dev"
 
 # KV: almacena la sesión OAuth de ML (access_token + refresh_token).
 # Crear con:  wrangler kv namespace create ML_TOKENS
@@ -37,3 +38,9 @@ crons = ["*/30 * * * *", "0 10 * * *"]
 #   wrangler secret put ML_CLIENT_SECRET
 #   wrangler secret put TELEGRAM_BOT_TOKEN
 #   wrangler secret put TELEGRAM_CHAT_ID
+
+# Assets estáticos (imagen de la historia promocional /ig promo).
+# Con `main` presente, los paths que matchean un asset se sirven directo;
+# el resto sigue yendo al fetch handler de index.js.
+[assets]
+directory = "./public"

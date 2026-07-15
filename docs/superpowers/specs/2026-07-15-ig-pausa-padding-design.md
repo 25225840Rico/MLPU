@@ -94,7 +94,7 @@ La historia no lleva caption (limitación de la Graph API, sin cambio).
 
 ### Imagen
 Estática, 1080×1920, generada UNA vez con `scripts/gen-promo-story.py` (Pillow) y
-commiteada en `worker/assets/promo-story.png` (~60 KB). Contenido aprobado:
+commiteada en `worker/public/ig/promo.png` (~60 KB). Contenido aprobado:
 TOPWHEELS.CL arriba en rojo · "STOCK DISPONIBLE" gigante (negro/verde) ·
 "ENVÍOS A TODO CHILE" 🚚📦 · píldoras STARKEN (verde), CHILEXPRESS (amarillo),
 BLUE EXPRESS (azul) · "ENTREGAS EN OFICINA / La Poderosa 175 · Antofagasta".
@@ -102,7 +102,7 @@ SIN hashtags (pedido explícito). Cambios de texto futuros = regenerar y redeplo
 
 ### Publicación
 La Graph API exige URL pública: el Worker sirve el PNG en `GET /ig/promo.png`
-vía Workers Static Assets (`[assets]` en wrangler.toml, binding `env.ASSETS`);
+vía Workers Static Assets (`[assets]` en wrangler.toml, sin binding: assets-first routing);
 la historia se publica con esa URL (media_type STORIES, sin wsrv: ya es 9:16 exacto).
 
 ### Flujo Telegram (2 botones)
