@@ -90,11 +90,37 @@ Telegram existente no cambia.
 
 La historia no lleva caption (limitación de la Graph API, sin cambio).
 
+## Parte 4 — Historia promocional `/ig promo` (imagen aprobada por el usuario)
+
+### Imagen
+Estática, 1080×1920, generada UNA vez con `scripts/gen-promo-story.py` (Pillow) y
+commiteada en `worker/assets/promo-story.png` (~60 KB). Contenido aprobado:
+TOPWHEELS.CL arriba en rojo · "STOCK DISPONIBLE" gigante (negro/verde) ·
+"ENVÍOS A TODO CHILE" 🚚📦 · píldoras STARKEN (verde), CHILEXPRESS (amarillo),
+BLUE EXPRESS (azul) · "ENTREGAS EN OFICINA / La Poderosa 175 · Antofagasta".
+SIN hashtags (pedido explícito). Cambios de texto futuros = regenerar y redeploy.
+
+### Publicación
+La Graph API exige URL pública: el Worker sirve el PNG en `GET /ig/promo.png`
+vía Workers Static Assets (`[assets]` en wrangler.toml, binding `env.ASSETS`);
+la historia se publica con esa URL (media_type STORIES, sin wsrv: ya es 9:16 exacto).
+
+### Flujo Telegram (2 botones)
+1. `/ig promo` → el bot manda la imagen al chat (sendPhoto con la URL pública)
+   con teclado inline: **[📤 Subir a historia]** `ig:promo:go` · **[❌ Cancelar]** `ig:promo:no`.
+2. `ig:promo:go` → publica la historia en @topwheels.cl, edita el mensaje a
+   "✅ Historia promocional publicada". `ig:promo:no` → edita a "Cancelado".
+3. Respeta el flag `pausado` NO: la promo es acción manual explícita, se publica
+   igual aunque la cola esté pausada.
+4. Errores: mismo manejo que el resto (aviso por Telegram, sin reintentos en cola;
+   el usuario simplemente vuelve a tocar el botón).
+
 ## Errores y pruebas
 - Tests nuevos (runner `node --test`, fakes existentes):
   - `padImageUrl`: URL correcta feed/historia, encoding de la URL de ML, q=95.
   - `maxResPicture`: convierte `-O.jpg` → `2X_…-F.jpg`; URL no-mlstatic queda intacta.
   - `buildCaption`: formato nuevo (🟢 DISPONIBLE, bloques separados).
+  - `/ig promo`: sendPhoto con teclado inline; callbacks go/no (publica / cancela).
   - Publicador respeta `pausado` (no publica; corta a mitad de tanda).
   - `/ig vaciar` cancela solo pendientes y reporta el conteo.
   - Fallback: primer intento wsrv falla → segundo intento con URL original.
