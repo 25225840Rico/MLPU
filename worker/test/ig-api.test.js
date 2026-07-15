@@ -50,6 +50,52 @@ test('igPublishImage propaga el error de la Graph API', async () => {
   await assert.rejects(() => igPublishImage(env, { imageUrl: 'https://x/y.jpg', caption: 'c' }), /token expirado/)
 })
 
+// Helpers para los tests de igPublishImage con padding/wsrv (Task 3).
+async function makeEnv() {
+  const env = envBase()
+  await env.DB.seedConfig('meta_token', JSON.stringify({ token: 'TOK', obtenido_en: new Date().toISOString() }))
+  return env
+}
+
+function mockGraphOk() {
+  return stubFetch(url => url.includes('/media_publish') ? okJson({ id: 'P1' }) : okJson({ id: 'C1' }))
+}
+
+test('igPublishImage: usa wsrv + variante -F.jpg para el feed', async () => {
+  const calls = mockGraphOk()
+  const env = await makeEnv()
+  await igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp', caption: 'hola' })
+  const body = calls[0].opts.body
+  const img = new URLSearchParams(body).get('image_url')
+  assert.ok(img.startsWith('https://wsrv.nl/?url='))
+  assert.ok(img.includes(encodeURIComponent('D_1-MLC2_072026-F.jpg')))
+  assert.ok(img.includes('h%3D1080') || img.includes('h=1080'))
+})
+
+test('igPublishImage: si wsrv falla reintenta con la URL original', async () => {
+  let mediaCalls = 0
+  const calls = stubFetch(url => {
+    if (url.includes('/media_publish')) return okJson({ id: 'P1' })
+    mediaCalls++
+    if (mediaCalls === 1) return { ok: true, json: async () => ({ error: { message: 'bad image' } }) }
+    return okJson({ id: 'C1' })
+  })
+  const env = await makeEnv()
+  const id = await igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp', caption: 'x' })
+  assert.equal(id, 'P1')
+  const img2 = new URLSearchParams(calls[1].opts.body).get('image_url')
+  assert.equal(img2, 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp')
+})
+
+test('igPublishImage raw: publica la URL tal cual (sin wsrv)', async () => {
+  const calls = mockGraphOk()
+  const env = await makeEnv()
+  await igPublishImage(env, { imageUrl: 'https://mlpu-proxy.aronricocl.workers.dev/ig/promo.png', story: true, raw: true })
+  const p = new URLSearchParams(calls[0].opts.body)
+  assert.equal(p.get('image_url'), 'https://mlpu-proxy.aronricocl.workers.dev/ig/promo.png')
+  assert.equal(p.get('media_type'), 'STORIES')
+})
+
 test('fetchOnlineFollowers suma por hora y devuelve null si no hay métrica', async () => {
   const env = envBase()
   await env.DB.seedConfig('meta_token', JSON.stringify({ token: 'TOK', obtenido_en: new Date().toISOString() }))

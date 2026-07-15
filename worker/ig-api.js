@@ -4,6 +4,8 @@
  * Worker no puede escribir secrets; se renueva vía fb_exchange_token.
  */
 
+import { maxResPicture, padImageUrl } from './ig-logic.js'
+
 const GRAPH = 'https://graph.facebook.com/v21.0'
 const REFRESH_AFTER_MS = 45 * 24 * 3600 * 1000 // renovar a los 45 días (expira a los 60)
 const log = (...a) => console.log('[IG]', ...a)
@@ -30,17 +32,27 @@ async function graphPost(path, params) {
   return data
 }
 
-// Publica una imagen como post de feed (con caption) o como historia (story: true).
-// Dos pasos de la API: crear contenedor → media_publish. Devuelve el media id.
-export async function igPublishImage(env, { imageUrl, caption, story = false }) {
+// Publica una imagen como post de feed (con caption) o historia (story: true).
+// Sin raw: pasa por wsrv.nl (padding blanco, sin recorte) partiendo de la variante
+// -F.jpg de ML; si wsrv o la descarga fallan, reintenta una vez con la URL original.
+export async function igPublishImage(env, { imageUrl, caption, story = false, raw = false }) {
   const token = await getMetaToken(env.DB)
-  const cont = await graphPost(`${env.IG_USER_ID}/media`, {
-    image_url: imageUrl,
-    ...(story ? { media_type: 'STORIES' } : { caption }),
-    access_token: token,
-  })
-  const pub = await graphPost(`${env.IG_USER_ID}/media_publish`, { creation_id: cont.id, access_token: token })
-  return pub.id
+  const attempt = async (img) => {
+    const cont = await graphPost(`${env.IG_USER_ID}/media`, {
+      image_url: img,
+      ...(story ? { media_type: 'STORIES' } : { caption }),
+      access_token: token,
+    })
+    const pub = await graphPost(`${env.IG_USER_ID}/media_publish`, { creation_id: cont.id, access_token: token })
+    return pub.id
+  }
+  if (raw) return attempt(imageUrl)
+  try {
+    return await attempt(padImageUrl(maxResPicture(imageUrl), story))
+  } catch (e) {
+    log('padding falló, reintento con la URL original:', e.message)
+    return attempt(imageUrl)
+  }
 }
 
 // Seguidores conectados por hora (metric online_followers). La API entrega un
