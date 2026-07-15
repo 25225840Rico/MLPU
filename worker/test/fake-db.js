@@ -21,7 +21,7 @@ function makeStmt(db, sql, args) {
       const [ml_item_id, titulo, precio, permalink_ml] = args
       const row = db.queue.find(r => r.ml_item_id === ml_item_id)
       if (!row) { db.seedQueue({ ml_item_id, titulo, precio, permalink_ml, creado_en: new Date().toISOString() }); changes = 1 }
-      else if (row.estado === 'cancelado') { Object.assign(row, { estado: 'pendiente', intentos: 0, ultimo_error: null }); changes = 1 }
+      else if (row.estado === 'cancelado') { Object.assign(row, { estado: 'pendiente', intentos: 0, ultimo_error: null, titulo, precio, permalink_ml }); changes = 1 }
       return { success: true, meta: { changes } }
     } else if (sql.includes('INSERT OR IGNORE INTO ig_queue')) {
       const [ml_item_id, titulo, precio, permalink_ml] = args

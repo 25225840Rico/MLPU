@@ -77,7 +77,7 @@ test('igPublishImage: si wsrv falla reintenta con la URL original', async () => 
   const calls = stubFetch(url => {
     if (url.includes('/media_publish')) return okJson({ id: 'P1' })
     mediaCalls++
-    if (mediaCalls === 1) return { ok: true, json: async () => ({ error: { message: 'bad image' } }) }
+    if (mediaCalls === 1) return { ok: true, json: async () => ({ error: { message: 'Media download failed: bad image url' } }) }
     return okJson({ id: 'C1' })
   })
   const env = await makeEnv()
@@ -85,6 +85,21 @@ test('igPublishImage: si wsrv falla reintenta con la URL original', async () => 
   assert.equal(id, 'P1')
   const img2 = new URLSearchParams(calls[1].opts.body).get('image_url')
   assert.equal(img2, 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp')
+})
+
+test('igPublishImage: si el error es rate-limit/token, NO reintenta y lanza', async () => {
+  let mediaCalls = 0
+  stubFetch(url => {
+    if (url.includes('/media_publish')) return okJson({ id: 'P1' })
+    mediaCalls++
+    return { ok: true, json: async () => ({ error: { message: '(#4) Application request limit reached' } }) }
+  })
+  const env = await makeEnv()
+  await assert.rejects(
+    () => igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp', caption: 'x' }),
+    /Application request limit reached/
+  )
+  assert.equal(mediaCalls, 1) // no hubo segundo intento
 })
 
 test('igPublishImage raw: publica la URL tal cual (sin wsrv)', async () => {

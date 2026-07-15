@@ -50,10 +50,16 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
   try {
     return await attempt(padImageUrl(maxResPicture(imageUrl), story))
   } catch (e) {
+    // Solo reintentar sin padding si el error parece de la imagen/descarga (wsrv caído,
+    // Graph no pudo bajarla); un rate-limit o token vencido fallaría igual y duplica llamadas.
+    if (!esErrorDeImagen(e)) throw e
     log('padding falló, reintento con la URL original:', e.message)
     return attempt(imageUrl)
   }
 }
+
+const esErrorDeImagen = (e) => /image|photo|media|download|fetch|url/i.test(e.message) &&
+  !/rate|limit|token|permission|oauth/i.test(e.message)
 
 // Seguidores conectados por hora (metric online_followers). La API entrega un
 // valor por día; se suman los días devueltos. null si la cuenta aún no da datos.

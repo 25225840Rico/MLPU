@@ -150,15 +150,16 @@ test('vaciarCola: cancela todos los pendientes y devuelve el conteo', async () =
 
 test('enqueueStock: re-encola ítems cancelados (UPSERT), no los publicados', async () => {
   const env = { DB: new FakeDB(), SELLER_ID: 'S1' }
-  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1, estado: 'cancelado', intentos: 2, ultimo_error: 'x' })
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'VIEJO', precio: 999, permalink_ml: 'https://x/viejo', estado: 'cancelado', intentos: 2, ultimo_error: 'x' })
   env.DB.seedQueue({ ml_item_id: 'MLC2', titulo: 'B', precio: 2, estado: 'publicado' })
   const pages = [{ results: ['MLC1', 'MLC2'], paging: { total: 2 } }]
-  const detail = [{ body: { id: 'MLC1', title: 'A', price: 1, permalink: 'https://x/1', status: 'active' } },
+  const detail = [{ body: { id: 'MLC1', title: 'FRESCO', price: 1234, permalink: 'https://x/1', status: 'active' } },
                   { body: { id: 'MLC2', title: 'B', price: 2, permalink: 'https://x/2', status: 'active' } }]
   const fakeFetch = async (url) => ({ json: async () => url.includes('/items/search') ? pages[0] : detail })
   const r = await enqueueStock(env, { getToken: async () => 'T', mlFetch: fakeFetch })
   assert.equal(r.encolados, 1) // solo MLC1 (cancelado→pendiente); MLC2 publicado queda intacto
   const row = env.DB.queue.find(x => x.ml_item_id === 'MLC1')
   assert.equal(row.estado, 'pendiente'); assert.equal(row.intentos, 0); assert.equal(row.ultimo_error, null)
+  assert.equal(row.titulo, 'FRESCO'); assert.equal(row.precio, 1234); assert.equal(row.permalink_ml, 'https://x/1')
   assert.equal(env.DB.queue.find(x => x.ml_item_id === 'MLC2').estado, 'publicado')
 })

@@ -151,7 +151,8 @@ export async function enqueueStock(env, deps = {}) {
       if (b?.status !== 'active') continue
       const res = await env.DB.prepare(
         `INSERT INTO ig_queue (ml_item_id, titulo, precio, permalink_ml) VALUES (?, ?, ?, ?)
-         ON CONFLICT(ml_item_id) DO UPDATE SET estado='pendiente', intentos=0, ultimo_error=NULL
+         ON CONFLICT(ml_item_id) DO UPDATE SET estado='pendiente', intentos=0, ultimo_error=NULL,
+           titulo=excluded.titulo, precio=excluded.precio, permalink_ml=excluded.permalink_ml
          WHERE ig_queue.estado='cancelado'`)
         .bind(b.id, b.title, Math.round(Number(b.price)) || 0, b.permalink || null).run()
       encolados += (res.meta?.changes ?? 0)
