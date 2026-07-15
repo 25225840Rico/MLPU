@@ -8,6 +8,10 @@
    solo se pueden quitar de a uno (`/ig quitar <id>`).
 2. Instagram recorta las fotos de ML de forma arbitraria (feed e historias):
    la contingencia de padding prevista en la spec original se activa ahora.
+3. La imagen publicada se ve muy comprimida: hoy se usa `pictures[0].secure_url`,
+   que en ML es la variante `-O` (~500px). El usuario quiere máxima calidad.
+4. Nuevo formato de caption del feed: precio + disponibilidad con emoji verde,
+   bien formateado (aprobado por el usuario, ver Parte 3).
 
 ## Parte 1 — Pausa y vaciado
 
@@ -40,12 +44,23 @@ público **wsrv.nl** (images.weserv.nl, gratuito, corre sobre Cloudflare) que re
 con fondo blanco hasta la proporción exacta, sin recortar:
 
 - **Feed (cuadrado 1:1):**
-  `https://wsrv.nl/?url=<encodeURIComponent(fotoML)>&w=1080&h=1080&fit=contain&cbg=white&output=jpg`
+  `https://wsrv.nl/?url=<encodeURIComponent(fotoML)>&w=1080&h=1080&fit=contain&cbg=white&output=jpg&q=95`
 - **Historia (9:16):**
-  `https://wsrv.nl/?url=<...>&w=1080&h=1920&fit=contain&cbg=white&output=jpg`
+  `https://wsrv.nl/?url=<...>&w=1080&h=1920&fit=contain&cbg=white&output=jpg&q=95`
 
 Implementación: helper puro `padImageUrl(mlUrl, story)` en `ig-logic.js`;
 `igPublishImage` (ig-api.js) lo aplica según `story`.
+
+### Máxima calidad de origen (verificado con el CDN real el 2026-07-15)
+La foto de partida deja de ser `pictures[0].secure_url` tal cual (variante `-O`,
+500px, ~23 KB — la causa principal de la compresión visible):
+- Helper puro `maxResPicture(url)` en `ig-logic.js`: si la URL mlstatic termina en
+  `-O.<ext>`, la cambia a **`-F.jpg`** (tamaño máximo del original = `max_size`;
+  medido: 900×1200 y 241 KB en JPEG vs 66 KB del webp). Si no calza el patrón,
+  la devuelve intacta. El prefijo `2X_` NO aporta (verificado: mismo 900×1200).
+- `q=95` en wsrv (default ~80) y JPEG de salida.
+- Lienzo 1080 (recomendación de la Graph API); IG re-comprime siempre, pero
+  partir del original completo + q=95 es la máxima calidad alcanzable por este canal.
 
 ### Fallback
 Si la publicación con URL wsrv falla (wsrv caído o Graph API no pudo descargarla),
@@ -58,9 +73,28 @@ Telegram existente no cambia.
   plan B si wsrv.nl desaparece.
 - **Cloudflare Images:** requiere zona/dominio propio o plan pago; sobredimensionado.
 
+## Parte 3 — Caption del feed (formato aprobado)
+
+`buildCaption` (ig-logic.js) pasa a producir, con línea en blanco entre bloques:
+
+```
+🔧 <TITULO>
+
+💰 <PRECIO CLP>
+🟢 DISPONIBLE
+
+👉 Comprar: <link ML>
+
+#repuestos #autos #desarme #repuestosusados #chile
+```
+
+La historia no lleva caption (limitación de la Graph API, sin cambio).
+
 ## Errores y pruebas
 - Tests nuevos (runner `node --test`, fakes existentes):
-  - `padImageUrl`: URL correcta feed/historia, encoding de la URL de ML.
+  - `padImageUrl`: URL correcta feed/historia, encoding de la URL de ML, q=95.
+  - `maxResPicture`: convierte `-O.jpg` → `2X_…-F.jpg`; URL no-mlstatic queda intacta.
+  - `buildCaption`: formato nuevo (🟢 DISPONIBLE, bloques separados).
   - Publicador respeta `pausado` (no publica; corta a mitad de tanda).
   - `/ig vaciar` cancela solo pendientes y reporta el conteo.
   - Fallback: primer intento wsrv falla → segundo intento con URL original.
