@@ -62,3 +62,17 @@ export function windowKey(date, windows, tz = 'America/Santiago') {
   const w = activeWindow(date, windows, tz)
   return w ? `${localParts(date, tz).fecha}T${w}` : null
 }
+
+// Variante de máxima resolución del CDN de ML: pictures[].secure_url llega como
+// '-O' (~500px); '-F.jpg' es el original completo (= max_size). Verificado 2026-07-15.
+export function maxResPicture(url) {
+  if (typeof url !== 'string' || !/\bmlstatic\.com\//.test(url)) return url
+  return url.replace(/-O\.(jpe?g|webp|png)$/i, '-F.jpg')
+}
+
+// URL del proxy wsrv.nl que rellena con blanco hasta la proporción exacta de IG
+// (feed 1:1, historia 9:16) sin recortar. q=95 porque el default (~80) degrada visible.
+export function padImageUrl(url, story = false) {
+  return `https://wsrv.nl/?url=${encodeURIComponent(url)}` +
+    `&w=1080&h=${story ? 1920 : 1080}&fit=contain&cbg=white&output=jpg&q=95`
+}
