@@ -22,7 +22,7 @@ import {
   analyzeProduct, clusterPhotos, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
   getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, getVentanas, runIgPublisher } from './ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, getVentanas, runIgPublisher, isPausado, setPausado } from './ig-queue.js'
 import { fmtCLP } from './ig-logic.js'
 
 const TG_API = 'https://api.telegram.org'
@@ -396,11 +396,12 @@ async function handleIgCommand(env, chatId, args) {
   const [sub, ...rest] = args.split(/\s+/).filter(Boolean)
 
   if (sub === 'cola' || !sub) {
+    const pausada = await isPausado(env) ? '⏸ <b>PAUSADO</b> (reanudar: /ig seguir)\n\n' : ''
     const rows = await listPendientes(env)
-    if (!rows.length) return tgSend(env, chatId, '📭 La cola de Instagram está vacía. Cargar inventario: /ig stock')
+    if (!rows.length) return tgSend(env, chatId, `${pausada}📭 La cola de Instagram está vacía. Cargar inventario: /ig stock`)
     const lines = rows.map((r, i) =>
       `${i + 1}. <code>${r.id}</code> ${esc(r.titulo)} — ${fmtCLP(r.precio)}${r.intentos ? ` (${r.intentos} intento/s fallido/s)` : ''}`)
-    return tgSend(env, chatId, `📸 <b>Cola de Instagram (${rows.length})</b>\n\n${lines.join('\n')}\n\nQuitar: /ig quitar &lt;id&gt; · Publicar ya: /ig ahora`)
+    return tgSend(env, chatId, `${pausada}📸 <b>Cola de Instagram (${rows.length})</b>\n\n${lines.join('\n')}\n\nQuitar: /ig quitar &lt;id&gt; · Publicar ya: /ig ahora`)
   }
   if (sub === 'stock') {
     await tgSend(env, chatId, '⏳ Revisando el inventario activo en ML…')
@@ -416,7 +417,16 @@ async function handleIgCommand(env, chatId, args) {
     await tgSend(env, chatId, '⏳ Publicando la cola de Instagram ya…')
     let r
     try { r = await runIgPublisher(env, { force: true, notify }) } catch (e) { return tgSend(env, chatId, `❌ IG falló: ${esc(e.message)}`) }
+    if (r.pausado) return tgSend(env, chatId, '⏸ La cola está pausada; no publiqué nada. Reanudar: /ig seguir')
     return tgSend(env, chatId, r.publicados ? `✅ Publiqué ${r.publicados} producto(s) en IG.` : 'No había nada publicable en la cola.')
+  }
+  if (sub === 'parar') {
+    await setPausado(env, true)
+    return tgSend(env, chatId, '⏸ Publicación en Instagram PAUSADA (los crons no suben nada). Reanudar: /ig seguir · Vaciar la cola: /ig vaciar')
+  }
+  if (sub === 'seguir') {
+    await setPausado(env, false)
+    return tgSend(env, chatId, '▶️ Publicación en Instagram reanudada: la cola sigue en las próximas ventanas.')
   }
   if (sub === 'horas') {
     if (rest[0] === 'auto') {
@@ -433,7 +443,7 @@ async function handleIgCommand(env, chatId, args) {
     const v = await getVentanas(env)
     return tgSend(env, chatId, `🕐 Ventanas vigentes: <b>${v.horas.join(', ')}</b> (origen: ${v.origen}).\nCambiar: /ig horas 12:30 20:00 · Automático: /ig horas auto`)
   }
-  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig ahora · /ig horas')
+  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig ahora · /ig parar · /ig seguir · /ig horas · /ig promo')
 }
 
 async function sendOrdersList(env, chatId) {

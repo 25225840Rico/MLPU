@@ -47,6 +47,15 @@ export async function getVentanas(env) {
   return { horas: FALLBACK_WINDOWS, origen: 'fallback' }
 }
 
+export async function isPausado(env) {
+  return !!(await getConfig(env.DB, 'pausado'))
+}
+
+export async function setPausado(env, on) {
+  if (on) return setConfig(env.DB, 'pausado', { desde: new Date().toISOString() })
+  await env.DB.prepare("DELETE FROM ig_config WHERE clave='pausado'").run()
+}
+
 // Import dinámico para no arrastrar index.js (y todo el worker) a los unit tests.
 async function getMlToken(env) {
   const { getValidAccessToken } = await import('./index.js')
@@ -62,6 +71,7 @@ async function getItemDefault(env, mlItemId) {
 }
 
 export async function runIgPublisher(env, { force = false, now = new Date(), notify = async () => {}, deps = {} } = {}) {
+  if (await isPausado(env)) return { publicados: 0, pausado: true }
   const publishImage = deps.publishImage || igPublishImage
   const getItem      = deps.getItem      || getItemDefault
   const { horas } = await getVentanas(env)
@@ -79,6 +89,7 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
   let publicados = 0
 
   for (const row of results || []) {
+    if (await isPausado(env)) return { publicados, pausado: true }
     try {
       const item = await getItem(env, row.ml_item_id)
       if (item.status !== 'active') {

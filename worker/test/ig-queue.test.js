@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, getVentanas, runIgPublisher } from '../ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, getVentanas, runIgPublisher, isPausado, setPausado } from '../ig-queue.js'
 import { FakeDB } from './fake-db.js'
 
 const mkEnv = () => ({ DB: new FakeDB(), IG_USER_ID: 'IGU', TELEGRAM_CHAT_ID: '1', SELLER_ID: '283388639' })
@@ -108,4 +108,33 @@ test('enqueueStock pagina, filtra activos y dedupea', async () => {
   assert.equal(r.total, 3)
   assert.equal(r.encolados, 1) // solo MLC11
   assert.equal((await listPendientes(env)).length, 2)
+})
+
+test('runIgPublisher: con pausado activo no publica nada', async () => {
+  const env = { DB: new FakeDB() }
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1000, permalink_ml: 'https://x/1' })
+  await setPausado(env, true)
+  const r = await runIgPublisher(env, { force: true, deps: { publishImage: async () => { throw new Error('no debía publicar') }, getItem: async () => ({ status: 'active', pictures: [{ secure_url: 'https://f/1.jpg' }] }) } })
+  assert.deepEqual(r, { publicados: 0, pausado: true })
+})
+
+test('runIgPublisher: /ig parar a mitad de tanda corta el resto', async () => {
+  const env = { DB: new FakeDB() }
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1, permalink_ml: 'https://x/1' })
+  env.DB.seedQueue({ ml_item_id: 'MLC2', titulo: 'B', precio: 2, permalink_ml: 'https://x/2' })
+  let published = 0
+  const r = await runIgPublisher(env, { force: true, deps: {
+    getItem: async () => ({ status: 'active', pictures: [{ secure_url: 'https://f/1.jpg' }] }),
+    publishImage: async () => { if (++published === 2) await setPausado(env, true); return 'M' + published },
+  } })
+  // el ítem 1 se publica (feed+historia = 2 llamadas, pausa al final); el ítem 2 ya no arranca
+  assert.equal(r.publicados, 1)
+  assert.equal(r.pausado, true)
+})
+
+test('setPausado(false) reanuda', async () => {
+  const env = { DB: new FakeDB() }
+  await setPausado(env, true)
+  await setPausado(env, false)
+  assert.equal(await isPausado(env), false)
 })
