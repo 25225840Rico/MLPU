@@ -24,6 +24,7 @@ import {
 } from './publisher.js'
 import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado } from './ig-queue.js'
 import { fmtCLP } from './ig-logic.js'
+import { igPublishImage } from './ig-api.js'
 
 const TG_API = 'https://api.telegram.org'
 const log    = (...a) => console.log('[ML-BOT]', ...a)
@@ -324,7 +325,7 @@ async function sendStart(env, chatId) {
     '📦 Despacho — foto del sticker para asignar tracking.\n' +
     '🧾 Órdenes · 📋 Historial — ventas reales de ML.\n' +
     '💬 Mensajes — directo, conversación y plantillas.\n' +
-    '📸 /ig — cola y horarios de Instagram (stock, cola, quitar, ahora, horas).\n\n' +
+    '📸 /ig — Instagram: stock, cola, quitar, vaciar, ahora, parar, seguir, horas, promo.\n\n' +
     '🔑 Si se corta la conexión con ML, te aviso por acá y reconectás pegando el código.',
     { reply_markup: MAIN_KB })
 }
@@ -449,6 +450,17 @@ async function handleIgCommand(env, chatId, args) {
     const v = await getVentanas(env)
     return tgSend(env, chatId, `🕐 Ventanas vigentes: <b>${v.horas.join(', ')}</b> (origen: ${v.origen}).\nCambiar: /ig horas 12:30 20:00 · Automático: /ig horas auto`)
   }
+  if (sub === 'promo') {
+    return tgApi(env, 'sendPhoto', {
+      chat_id: chatId,
+      photo: `${env.PUBLIC_URL}/ig/promo.png`,
+      caption: '📢 Vista previa de la historia promocional. ¿La subo a Instagram?',
+      reply_markup: { inline_keyboard: [[
+        { text: '📤 Subir a historia', callback_data: 'ig:promo:go' },
+        { text: '❌ Cancelar', callback_data: 'ig:promo:no' },
+      ]] },
+    })
+  }
   return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig ahora · /ig parar · /ig seguir · /ig horas · /ig promo')
 }
 
@@ -518,6 +530,21 @@ async function handleCallback(env, cq) {
   if (data === 'si')   return doConfirmYes(env, chatId)
   if (data === 'no')   return doConfirmNo(env, chatId)
   if (data === 'fin')  return doFinalize(env, chatId)
+  if (data === 'ig:promo:go') {
+    const edit = (caption) => tgApi(env, 'editMessageCaption',
+      { chat_id: chatId, message_id: cq.message.message_id, caption })
+    try {
+      // raw + sin chequear pausado: es una acción manual explícita y el PNG ya es 9:16.
+      await igPublishImage(env, { imageUrl: `${env.PUBLIC_URL}/ig/promo.png`, story: true, raw: true })
+      return edit('✅ Historia promocional publicada en Instagram.')
+    } catch (e) {
+      return edit(`❌ No pude publicar la promo: ${e.message.slice(0, 150)}. Tocá /ig promo para reintentar.`)
+    }
+  }
+  if (data === 'ig:promo:no') {
+    return tgApi(env, 'editMessageCaption',
+      { chat_id: chatId, message_id: cq.message.message_id, caption: 'Cancelado. La promo no se publicó.' })
+  }
   if (data.startsWith('hist:')) return sendHistory(env, chatId, parseInt(data.slice(5), 10) || 0)
   // ── Módulo 1: historial real desde ML ──
   if (data === 'hmenu')          return sendHistoryMenu(env, chatId)
