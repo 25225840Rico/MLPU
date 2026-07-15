@@ -8,9 +8,11 @@ test('fmtCLP separa miles con punto', () => {
   assert.equal(fmtCLP(1250000), '$1.250.000')
 })
 
-test('buildCaption arma título, precio, link y hashtags', () => {
-  const c = buildCaption({ titulo: 'Foco Hyundai Accent', precio: 19990, link: 'https://articulo.mercadolibre.cl/MLC-123' })
-  assert.match(c, /^🔧 Foco Hyundai Accent\n💰 \$19\.990\n👉 https:\/\/articulo\.mercadolibre\.cl\/MLC-123\n\n#/)
+test('buildCaption: título, precio, DISPONIBLE, link y hashtags en bloques', () => {
+  const c = buildCaption({ titulo: 'Llanta Bronco R15', precio: 12000, link: 'https://ml.cl/x' })
+  assert.equal(c,
+    '🔧 Llanta Bronco R15\n\n💰 $12.000\n🟢 DISPONIBLE\n\n👉 Comprar: https://ml.cl/x\n\n' +
+    '#repuestos #autos #desarme #repuestosusados #chile')
 })
 
 test('pickBestWindows elige las 2 mejores horas con separación mínima', () => {

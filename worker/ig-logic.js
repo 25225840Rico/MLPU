@@ -11,7 +11,7 @@ export function fmtCLP(n) {
 }
 
 export function buildCaption({ titulo, precio, link }) {
-  return `🔧 ${titulo}\n💰 ${fmtCLP(precio)}\n👉 ${link}\n\n${HASHTAGS}`
+  return `🔧 ${titulo}\n\n💰 ${fmtCLP(precio)}\n🟢 DISPONIBLE\n\n👉 Comprar: ${link}\n\n${HASHTAGS}`
 }
 
 // hourly: { '0': n, ..., '23': n } (seguidores conectados por hora, de insights).
