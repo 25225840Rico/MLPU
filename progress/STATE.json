@@ -1,10 +1,10 @@
 {
   "phase": "MLPU-INSTAGRAM COMPLETO Y EN PRODUCCIÓN (mergeado a main). Falta solo prueba real por Telegram + rotar App Secret. Siguiente sub-proyecto: TIENDA WEB. Optimizer CONGELADO.",
-  "status": "Sesión 13 (2026-07-15): Task 7 setup Meta completo (token largo en D1, IG_USER_ID @topwheels.cl) + fase pausa/padding/promo implementada con subagent-driven (7 tasks + fix final f820796): /ig parar|seguir|vaciar, padding wsrv q=95 + variante -F.jpg con fallback filtrado, caption 🟢 DISPONIBLE, /ig promo con botones. Merge a main 478c1f5 pusheado.",
+  "status": "Sesión 13 (2026-07-15): Task 7 setup Meta completo (token largo en D1, IG_USER_ID @topwheels.cl) + fase pausa/padding/promo implementada con subagent-driven (7 tasks + fix final f820796): /ig parar|seguir|vaciar, padding wsrv q=95 + variante -F.jpg con fallback filtrado, caption 🟢 DISPONIBLE, /ig promo con botones. Merge a main 478c1f5 pusheado. Parte 2: fix Media ID not available (retry), cache-buster promo, fondo BLUR WASM (/ig/img), caption v2 sin link + hashtags hotwheels, banner DISPONIBLE en historias. Deploy ad87c68c, main d74cbd1.",
   "last_session": "2026-07-15T14:30:00-04:00",
   "last_worker_version": "483712dc-b29d-451f-a307-984c1553e250",
   "last_commit": "478c1f5 (main, pusheado) — merge feature/mlpu-instagram",
-  "next_step": "Prueba real Telegram: /ig promo (botones) · /ig stock → /ig cola → /ig ahora (feed sin recorte + caption nuevo + historia) · /ig parar|seguir. Luego rotar App Secret en panel Meta y wrangler secret put META_APP_SECRET.",
+  "next_step": "Prueba real Telegram: /ig promo · /ig ahora (feed blur + caption DM, historia blur + banner DISPONIBLE). Luego rotar App Secret de Meta.",
   "open_tasks": [
     "Prueba real MLPU-Instagram: /ig promo, /ig stock→cola→ahora, parar/seguir + verificar en @topwheels.cl",
     "Rotar App Secret en panel Meta (quedó pegado en el chat) y re-subir con wrangler secret put",
