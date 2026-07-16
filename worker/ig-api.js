@@ -32,6 +32,24 @@ async function graphPost(path, params) {
   return data
 }
 
+const sleep = ms => new Promise(res => setTimeout(res, ms))
+let RETRY_BASE_MS = 1500
+export const _setRetryBaseMs = ms => { RETRY_BASE_MS = ms } // solo para tests
+
+// media_publish falla con "Media ID is not available" mientras Meta todavía
+// procesa el contenedor: reintentar con espera creciente (hasta ~15 s en total).
+async function publishWhenReady(igUserId, contId, token) {
+  for (let i = 0; ; i++) {
+    try {
+      return await graphPost(`${igUserId}/media_publish`, { creation_id: contId, access_token: token })
+    } catch (e) {
+      if (i >= 4 || !/media id is not available|not ready|in progress/i.test(e.message)) throw e
+      log(`contenedor ${contId} aún procesándose, reintento ${i + 1}…`)
+      await sleep((i + 1) * RETRY_BASE_MS)
+    }
+  }
+}
+
 // Publica una imagen como post de feed (con caption) o historia (story: true).
 // Sin raw: pasa por wsrv.nl (padding blanco, sin recorte) partiendo de la variante
 // -F.jpg de ML; si wsrv o la descarga fallan, reintenta una vez con la URL original.
@@ -43,7 +61,7 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
       ...(story ? { media_type: 'STORIES' } : { caption }),
       access_token: token,
     })
-    const pub = await graphPost(`${env.IG_USER_ID}/media_publish`, { creation_id: cont.id, access_token: token })
+    const pub = await publishWhenReady(env.IG_USER_ID, cont.id, token)
     return pub.id
   }
   if (raw) return attempt(imageUrl)
@@ -59,7 +77,7 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
 }
 
 const esErrorDeImagen = (e) => /image|photo|media|download|fetch|url/i.test(e.message) &&
-  !/rate|limit|token|permission|oauth/i.test(e.message)
+  !/rate|limit|token|permission|oauth|not available/i.test(e.message)
 
 // Seguidores conectados por hora (metric online_followers). La API entrega un
 // valor por día; se suman los días devueltos. null si la cuenta aún no da datos.

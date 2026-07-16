@@ -132,3 +132,24 @@ test('maybeRefreshMetaToken renueva solo si tiene más de 45 días', async () =>
   // recién renovado → no vuelve a renovar
   assert.equal(await maybeRefreshMetaToken(env), false)
 })
+
+test('igPublishImage reintenta media_publish mientras Meta procesa el contenedor', async () => {
+  const { _setRetryBaseMs } = await import('../ig-api.js')
+  _setRetryBaseMs(1)
+  const env = await makeEnv()
+  let publishCalls = 0
+  const calls = stubFetch(url => {
+    if (url.includes('/media_publish')) {
+      publishCalls++
+      return publishCalls < 3
+        ? { ok: false, json: async () => ({ error: { message: 'Media ID is not available' } }) }
+        : okJson({ id: 'PUB_OK' })
+    }
+    return okJson({ id: 'CONT9' })
+  })
+  const id = await igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/a-O.jpg', caption: 'x' })
+  assert.equal(id, 'PUB_OK')
+  assert.equal(publishCalls, 3)
+  assert.equal(calls.filter(c => c.url.endsWith('/media')).length, 1) // un solo contenedor, sin fallback
+  _setRetryBaseMs(1500)
+})
