@@ -1,3 +1,21 @@
+SAVE — MLPU (2026-07-16, sesión 14 — cierre)
+FIX ANTI-DUPLICADOS IG DESPLEGADO (commit cd8d257 SIN push, deploy 0d4712e2, 46/46 tests).
+Ayer se duplicaron posts: (1) si la historia fallaba, el reintento re-subía el
+MISMO feed; (2) /ig ahora repetido o cruzado con el cron publicaba las mismas
+filas; (3) poll de Meta de 15 s → "Media ID is not available".
+Fix: claim atómico por fila (estado 'publicando' + claimed_en), feed idempotente
+(ig_media_id se guarda apenas sale), historia best-effort, lock entre corridas,
+recovery de filas colgadas, poll ~60 s, /ig ahora [n] (1-10, default 3).
+Datos corregidos en D1: Viper marcado publicado; filas en error reseteadas.
+Cola: 134 pendientes · 10 publicados · 0 error · SIN pausa.
+PRÓXIMO PASO AL RETOMAR: git push + prueba real (t.me/Pulicadorlibre_bot):
+/ig ahora 1 → verificar feed+historia sin duplicados; /ig ahora dos veces
+seguidas debe decir "ya hay una publicación en curso".
+PENDIENTE SEGURIDAD (s13): rotar App Secret en panel Meta y
+wrangler secret put META_APP_SECRET. Decidir si re-publicar Tundra (id 4,
+el usuario borró su post del feed).
+Detalle: progress/CHECKPOINT.md · progress/log/2026-07-16.md
+
 SAVE — MLPU (2026-07-15, sesión 13 — cierre)
 MLPU-INSTAGRAM COMPLETO Y EN PRODUCCIÓN (mergeado a main 478c1f5, pusheado).
 Worker 483712dc · 35/35 tests · cuenta IG @topwheels.cl (17841476463162844).

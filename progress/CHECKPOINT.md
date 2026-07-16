@@ -1,38 +1,41 @@
 # CHECKPOINT — MLPU
 
-**Última sesión:** 2026-07-15 (sesión 13, cierre) | **Rama:** main (478c1f5, pusheado; feature/mlpu-instagram mergeada y borrada) |
-**Worker Version:** 483712dc | **Webhook:** ACTIVO | **Crons:** */30 (IG publisher) + 0 10 UTC (IG daily) | **Tests:** 35/35
+**Última sesión:** 2026-07-16 (sesión 14) | **Rama:** main (cd8d257, SIN push) |
+**Worker Version:** 0d4712e2 | **Webhook:** ACTIVO | **Crons:** */30 (IG publisher) + 0 10 UTC (IG daily) | **Tests:** 46/46
 
-## Fase actual: MLPU-INSTAGRAM — COMPLETO Y EN PRODUCCIÓN
-Solo falta la prueba real por Telegram (con el usuario). Cuenta IG: **@topwheels.cl** (IG_USER_ID 17841476463162844).
+## Fase actual: MLPU-INSTAGRAM — FIX ANTI-DUPLICADOS DESPLEGADO
+El 15/07 la prueba real duplicó posts en el feed y dejó filas inconsistentes.
+Post-mortem completo + fix en producción. Falta la prueba real del usuario.
 
-## Qué se completó esta sesión (2026-07-15)
-1. **Task 7 setup Meta**: secrets META_APP_ID/SECRET; token largo (60 días) sembrado en
-   D1 `ig_config.meta_token` (renovación automática >45 días); IG_USER_ID real en wrangler.toml.
-   Hallazgo: /me/accounts vacío → page/IG salen de debug_token→granular_scopes.
-2. **Fase pausa/padding/promo** (spec `docs/superpowers/specs/2026-07-15-ig-pausa-padding-design.md`,
-   plan `docs/superpowers/plans/2026-07-15-ig-pausa-padding-promo.md`, 7 tasks subagent-driven,
-   review final "Ready to merge" tras fix f820796):
-   - `/ig parar` / `/ig seguir` (flag pausado re-leído a mitad de tanda; cron diario nunca se pausa).
-   - `/ig vaciar` + UPSERT en enqueueStock (re-encola cancelados refrescando titulo/precio/permalink).
-   - Imágenes SIN recorte: padding blanco wsrv.nl (q=95) + máxima calidad (ML `-O`→`-F.jpg`);
-     fallback 1 reintento con URL original SOLO ante errores de imagen (no rate-limit/token).
-   - Caption feed: 🔧 título / 💰 precio / 🟢 DISPONIBLE / 👉 Comprar: link / hashtags.
-   - `/ig promo`: vista previa por Telegram + botones [📤 Subir a historia][❌ Cancelar];
-     PNG estático TOPWHEELS.CL (sin hashtags) en `/ig/promo.png` (static assets, `worker/public/ig/`);
-     regenerar con `scripts/gen-promo-story.py`; publica raw (sin wsrv, ignora pausado).
+## Qué se completó esta sesión (2026-07-16)
+1. **Diagnóstico con evidencia** (D1 + Graph API): 3 causas raíz —
+   (a) sin idempotencia: historia fallaba → reintento re-subía el MISMO feed;
+   (b) sin lock/claim: /ig ahora repetido o cruzado con el cron publicaba las
+   mismas filas; Worker cortado dejaba filas `pendiente` con el post ya en IG;
+   (c) poll de Meta de solo 15 s → "Media ID is not available".
+2. **Fix (commit cd8d257, deploy 0d4712e2)**: claim atómico por fila (estado
+   `publicando` + RETURNING + columna `claimed_en`), feed idempotente
+   (ig_media_id se guarda apenas sale), historia best-effort (su fallo no
+   repite el feed), lock entre corridas (TTL 10 min), recovery de filas
+   colgadas >15 min, poll ~60 s, `/ig ahora [n]` (1-10).
+3. **Datos remotos corregidos**: Viper (id 12) marcado publicado con su media_id
+   real; ids 2-3 reseteados a pendiente. Estado: 134 pendientes · 10 publicados · 0 error.
+4. Tests 40→46 (6 nuevos anti-duplicados); FakeDB extendido.
 
-## PRÓXIMO paso accionable (prueba real, usuario en t.me/Pulicadorlibre_bot)
-1. `/ig promo` → probar ambos botones → verificar historia en @topwheels.cl.
-2. `/ig stock` → `/ig cola` → `/ig ahora` → verificar feed (foto completa, caption nuevo) + historia.
-3. `/ig parar` → `/ig ahora` (debe avisar pausado) → `/ig seguir`.
-4. **SEGURIDAD**: rotar App Secret en panel Meta (quedó pegado en el chat) →
-   `wrangler secret put META_APP_SECRET` con el nuevo.
+## PRÓXIMO paso accionable
+1. `git push` (commit cd8d257 quedó local).
+2. Prueba real (t.me/Pulicadorlibre_bot): `/ig ahora 1` → verificar feed+historia
+   en @topwheels.cl sin duplicados; mandar `/ig ahora` dos veces seguidas debe
+   responder "ya hay una publicación en curso".
+3. **SEGURIDAD (heredado s13)**: rotar App Secret en panel Meta →
+   `wrangler secret put META_APP_SECRET`.
+4. Decidir si re-publicar la Tundra (id 4): DB dice publicado pero el usuario
+   borró el post del feed.
 
 ## Decisiones clave de esta fase
-- wsrv.nl como proxy de padding (WASM photon descartado: CPU/código; CF Images: pago).
-- Token Meta vive en D1; secrets de app en wrangler.
-- Promo estática commiteada (texto fijo); cambios = regenerar y redeploy.
+- Historia es best-effort: nunca justifica repetir el feed.
+- Claim por fila = garantía dura anti-duplicados; lock global = solo UX.
+- Cadena de imagen blur→wsrv→original se mantiene (no era la causa).
 
 ## Bloqueos
 - Ninguno de código. Prueba real y rotación de secret requieren al usuario.
