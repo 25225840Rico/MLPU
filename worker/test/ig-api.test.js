@@ -26,8 +26,10 @@ test('igPublishImage feed: media + media_publish', async () => {
     url.includes('/media_publish') ? okJson({ id: 'MEDIA9' }) : okJson({ id: 'CONT1' }))
   const id = await igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/x.jpg', caption: 'hola' })
   assert.equal(id, 'MEDIA9')
-  assert.equal(calls.length, 2)
+  // contenedor → consulta de status_code (poll) → media_publish
+  assert.equal(calls.length, 3)
   assert.match(calls[0].url, /\/17841400000000000\/media$/)
+  assert.match(calls[1].url, /fields=status_code/)
   assert.match(String(calls[0].opts.body), /caption=hola/)
   assert.ok(!String(calls[0].opts.body).includes('media_type'))
 })

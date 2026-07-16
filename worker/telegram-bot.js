@@ -113,7 +113,7 @@ export async function handleTelegramWebhook(request, env, ctx) {
       }
       if (update.callback_query)   await handleCallback(env, update.callback_query)
       else if (msg?.photo?.length) await handlePhoto(env, msg)
-      else if (msg?.text)          await handleTextCommand(env, msg)
+      else if (msg?.text)          await handleTextCommand(env, msg, ctx)
     } catch (e) {
       logErr('Error procesando update:', e.message)
     }
@@ -168,7 +168,7 @@ function esc(t) {
   return String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-async function handleTextCommand(env, msg) {
+async function handleTextCommand(env, msg, ctx) {
   const chatId = msg.chat.id
   const text   = (msg.text || '').trim()
   log(`msg de chat ${chatId}: ${text.slice(0, 40)}`)
@@ -270,7 +270,7 @@ async function handleTextCommand(env, msg) {
     return doAssign(env, chatId, orderId, p.tracking_number)
   }
 
-  if (text === '/ig' || text.startsWith('/ig ')) return handleIgCommand(env, chatId, text.slice(3).trim())
+  if (text === '/ig' || text.startsWith('/ig ')) return handleIgCommand(env, chatId, text.slice(3).trim(), ctx)
 
   if (text === '/ordenes')    return sendOrdersList(env, chatId)
   if (text === '/pendientes') return sendPendingList(env, chatId)
@@ -392,7 +392,7 @@ async function doFinalize(env, chatId) {
 }
 
 // ── Instagram: cola y ventanas ─────────────────────────────────
-async function handleIgCommand(env, chatId, args) {
+async function handleIgCommand(env, chatId, args, ctx) {
   const notify = t => tgSend(env, chatId, t)
   const [sub, ...rest] = args.split(/\s+/).filter(Boolean)
 
@@ -415,11 +415,18 @@ async function handleIgCommand(env, chatId, args) {
     return tgSend(env, chatId, ok ? `🗑 Quitado de la cola (id ${esc(rest[0] || '')}).` : `No encontré el id ${esc(rest[0] || '¿?')} pendiente. Mirá /ig cola.`)
   }
   if (sub === 'ahora') {
-    await tgSend(env, chatId, '⏳ Publicando la cola de Instagram ya…')
-    let r
-    try { r = await runIgPublisher(env, { force: true, notify }) } catch (e) { return tgSend(env, chatId, `❌ IG falló: ${esc(e.message)}`) }
-    if (r.pausado) return tgSend(env, chatId, '⏸ La cola está pausada; no publiqué nada. Reanudar: /ig seguir')
-    return tgSend(env, chatId, r.publicados ? `✅ Publiqué ${r.publicados} producto(s) en IG.` : 'No había nada publicable en la cola.')
+    await tgSend(env, chatId, '⏳ Publicando la cola de Instagram ya… (te aviso por acá a medida que salgan)')
+    const job = (async () => {
+      try {
+        const r = await runIgPublisher(env, { force: true, notify })
+        if (r.pausado) return tgSend(env, chatId, '⏸ La cola está pausada; no publiqué nada. Reanudar: /ig seguir')
+        return tgSend(env, chatId, r.publicados ? `✅ Listo: ${r.publicados} producto(s) publicados en IG.` : 'No había nada publicable en la cola.')
+      } catch (e) { return tgSend(env, chatId, `❌ IG falló: ${esc(e.message)}`) }
+    })()
+    // En segundo plano: el comando responde al instante y la publicación sigue
+    // viva vía waitUntil aunque Telegram cierre la conexión del webhook.
+    if (ctx?.waitUntil) { ctx.waitUntil(job); return }
+    return job
   }
   if (sub === 'parar') {
     await setPausado(env, true)

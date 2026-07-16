@@ -36,14 +36,30 @@ const sleep = ms => new Promise(res => setTimeout(res, ms))
 let RETRY_BASE_MS = 1500
 export const _setRetryBaseMs = ms => { RETRY_BASE_MS = ms } // solo para tests
 
-// media_publish falla con "Media ID is not available" mientras Meta todavía
-// procesa el contenedor: reintentar con espera creciente (hasta ~15 s en total).
+// Espera a que Meta termine de procesar el contenedor consultando su
+// status_code (publica APENAS está listo, en vez de reintentos ciegos).
+let POLL_MS = 600
+export const _setPollMs = ms => { POLL_MS = ms } // solo para tests
+async function waitForContainer(contId, token) {
+  for (let i = 0; i < 25; i++) {
+    const r = await fetch(`${GRAPH}/${contId}?fields=status_code&access_token=${encodeURIComponent(token)}`)
+    const data = await r.json().catch(() => ({}))
+    if (data.status_code === 'IN_PROGRESS') { await sleep(POLL_MS); continue }
+    if (data.status_code === 'ERROR' || data.status_code === 'EXPIRED')
+      throw new Error(`contenedor ${contId} quedó en ${data.status_code}`)
+    return // FINISHED, o status desconocido/no legible → intentar publicar igual
+  }
+}
+
+// Red de seguridad: si aun así media_publish dice "Media ID is not available",
+// reintentar un par de veces con espera creciente.
 async function publishWhenReady(igUserId, contId, token) {
+  await waitForContainer(contId, token)
   for (let i = 0; ; i++) {
     try {
       return await graphPost(`${igUserId}/media_publish`, { creation_id: contId, access_token: token })
     } catch (e) {
-      if (i >= 4 || !/media id is not available|not ready|in progress/i.test(e.message)) throw e
+      if (i >= 2 || !/media id is not available|not ready|in progress/i.test(e.message)) throw e
       log(`contenedor ${contId} aún procesándose, reintento ${i + 1}…`)
       await sleep((i + 1) * RETRY_BASE_MS)
     }
