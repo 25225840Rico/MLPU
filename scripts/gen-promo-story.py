@@ -41,10 +41,10 @@ for name, bg, fg in bands:
     d.text((W/2, y+80), name, font=font(ARIAL_B, 84), fill=fg, anchor='mm')
     y += 215
 
-# ── Entrega en oficina ── (y ≈ 1635 acá)
-d.text((W/2, 1700), "ENTREGAS EN OFICINA", font=font(ARIAL_B, 56), fill=(17,17,17), anchor='mm')
-d.text((W/2, 1790), "La Poderosa 175 · Antofagasta", font=font(ARIAL_B, 60), fill=(22, 163, 74), anchor='mm')
+# ── Entrega presencial ── (y ≈ 1635 acá)
+d.text((W/2, 1700), "ENTREGAS PRESENCIALES", font=font(ARIAL_B, 56), fill=(17,17,17), anchor='mm')
+d.text((W/2, 1790), "Oficina La Poderosa 175 · Antofagasta", font=font(ARIAL_B, 54), fill=(22, 163, 74), anchor='mm')
 
-out = r'C:\Users\aronr\AppData\Local\Temp\claude\C--WINDOWS-system32\9cb5b8dc-97fe-4b7f-a026-5e9bd055191f\scratchpad\promo-story.png'
+out = r'worker\public\ig\promo.png'
 img.save(out, optimize=True)
 print('OK', out)
