@@ -1,12 +1,13 @@
 {
-  "phase": "MLPU-INSTAGRAM: código completo y desplegado (Tasks 1-6 del plan); falta Task 7 (setup Meta + prueba real). Tienda web = sub-proyecto siguiente (decisiones tomadas). Optimizer CONGELADO.",
-  "status": "Sesión 12 (2026-07-13/14): spec+plan MLPU-Instagram aprobados y ejecutados inline en rama feature/mlpu-instagram (8b50be0). D1 mlpu-db creada (ig_queue/ig_config), módulos ig-logic/ig-api/ig-queue + comandos /ig en el bot + crons (*/30 y 0 10 UTC). 22/22 tests (runner node --test nuevo). Deploy 09ff897e.",
-  "last_session": "2026-07-14T00:00:00-04:00",
-  "last_worker_version": "09ff897e-0e6d-4a5e-8312-571a9f50f67a",
-  "last_commit": "8b50be0 (feature/mlpu-instagram, sin push) — crons IG + deploy",
-  "next_step": "Task 7 del plan docs/superpowers/plans/2026-07-13-mlpu-instagram.md: pedir App ID/Secret de Meta (app ya creada), obtener IG_USER_ID + token largo vía Graph API Explorer, sembrar meta_token en D1 remota, IG_USER_ID real en wrangler.toml + redeploy, y prueba real /ig stock → /ig ahora. Luego finishing-a-development-branch (merge a main) y SAVE.txt.",
+  "phase": "MLPU-INSTAGRAM: Task 7 setup Meta COMPLETO (secrets, IG_USER_ID @topwheels.cl, token largo en D1, redeploy); falta SOLO la prueba real por Telegram. Tienda web = sub-proyecto siguiente (decisiones tomadas). Optimizer CONGELADO.",
+  "status": "Sesión 13 (2026-07-15): secrets META_APP_ID/SECRET subidos; /me/accounts vacío → page e IG obtenidos vía debug_token granular_scopes (page 660949953775866, IG 17841476463162844 = @topwheels.cl, 287 followers); token largo canjeado y sembrado en ig_config.meta_token; IG_USER_ID real en wrangler.toml + deploy 65bcbb83; commit 0957051.",
+  "last_session": "2026-07-15T12:00:00-04:00",
+  "last_worker_version": "65bcbb83-e662-4259-8a2e-eb94b4235bf7",
+  "last_commit": "0957051 (feature/mlpu-instagram, sin push) — IG_USER_ID real en wrangler.toml",
+  "next_step": "Prueba real (usuario en Telegram): /ig stock → /ig cola → /ig ahora → verificar feed+historia en @topwheels.cl. Si IG rechaza proporción → padding WASM (spec). Al pasar: finishing-a-development-branch (merge a main + push), SAVE.txt, y recordar rotar App Secret en panel Meta.",
   "open_tasks": [
-    "Task 7 MLPU-Instagram: secrets Meta + IG_USER_ID + token + prueba real (/ig stock, /ig ahora)",
+    "Prueba real MLPU-Instagram: /ig stock, /ig cola, /ig ahora + verificar en @topwheels.cl",
+    "Rotar App Secret en panel Meta (quedó pegado en el chat) y re-subir con wrangler secret put",
     "Sub-proyecto MLPU-Tienda: brainstorm fino + spec (Worker+D1, MP Checkout Pro + Webpay Plus, sync bidireccional, dominio del usuario → nameservers Cloudflare)",
     "Si IG rechaza imágenes por proporción: contingencia padding WASM (spec)",
     "Prueba real de la separación automática (fotos mezcladas de 2-3 autos) + verificar Premium/envío comprador en el ítem publicado",
@@ -20,7 +21,7 @@
     "Opcional: actualizar Node 20→24 en .github/workflows/deploy.yml"
   ],
   "blockers": [
-    "Task 7 necesita al usuario: App ID/Secret de la app Meta y generación del token (guiada).",
+    "Prueba real requiere al usuario en Telegram (comandos /ig). Setup Meta ya completo.",
     "PR #1 (cotizador-costos) bloqueado esperando URL+anon-key de Supabase vivo.",
     "Envío gratis OBLIGATORIO a precio ≥ $19.990 EXACTO en MLC — sin salida salvo precio < $19.990 (2026-07-10): aplica a todos los listing_types y ML revierte en silencio; a $19.989 se libera (verificado). Los 2 ítems que estaban justo en $19.990 se bajaron a $19.989 (Premium + envío por comprador); quedan 49 con precio > $19.990 en Premium + envío gratis (costo vendedor ~$6.300/venta)."
   ],

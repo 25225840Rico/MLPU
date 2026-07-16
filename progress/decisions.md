@@ -32,3 +32,5 @@
 2026-07-13 - Token de Meta en D1 (ig_config.meta_token) con renovación automática fb_exchange_token a los 45 días - Un Worker no puede escribir sus propios secrets; D1 permite que el cron diario rote el token sin intervención.
 2026-07-13 - /ig stock: carga inicial de todo el inventario activo de ML a la cola de IG (goteo ~6/día) - El usuario quiere partir promocionando el stock existente (160 ítems) sin esperar publicaciones nuevas; el goteo da ~1 mes de contenido.
 2026-07-13 - Optimizer CONGELADO a pedido del usuario; la D1 mlpu-db (planeada para optimizer) nace en MLPU-Instagram - Prioridad: Instagram ya, tienda web después.
+
+2026-07-15 - Page ID e IG_USER_ID se obtienen de debug_token→granular_scopes, no de /me/accounts - /me/accounts devolvió vacío pese a permisos granted (comportamiento de permisos granulares de Meta); debug_token con app-token expone los target_ids reales.
