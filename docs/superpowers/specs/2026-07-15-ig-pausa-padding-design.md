@@ -115,6 +115,23 @@ la historia se publica con esa URL (media_type STORIES, sin wsrv: ya es 9:16 exa
 4. Errores: mismo manejo que el resto (aviso por Telegram, sin reintentos en cola;
    el usuario simplemente vuelve a tocar el botón).
 
+## Parte 5 — Fondo blur (aprobado 2026-07-15, reemplaza el fondo blanco)
+
+El usuario pidió que el relleno sea **la misma foto ampliada y blurreada** (feed e
+historias por igual). wsrv.nl no compone capas → se procesa en el Worker con WASM
+(photon), asumiendo el riesgo de CPU del plan (elegido explícitamente).
+
+- Endpoint `GET /ig/img?u=<url mlstatic encodeada>[&s=1]` en el Worker
+  (`worker/ig-image.js`): descarga la foto, arma lienzo 1080×1080 (feed) o
+  1080×1920 (historia con `s=1`): fondo = foto escalada a cubrir + blur
+  (downscale/upscale + gaussian barato), primer plano = foto completa centrada
+  (contain). Devuelve JPEG q≈90 con Cache-Control 1 día.
+  Seguridad: solo URLs de `mlstatic.com` (no proxy abierto).
+- `igPublishImage` publica `${PUBLIC_URL}/ig/img?...`; cadena de fallback:
+  blur → wsrv padding blanco → URL original de ML (solo ante errores de imagen,
+  igual que hoy). La promo (`raw`) no cambia.
+- Dependencia nueva: `@cf-wasm/photon` (photon-rs compilado a WASM).
+
 ## Errores y pruebas
 - Tests nuevos (runner `node --test`, fakes existentes):
   - `padImageUrl`: URL correcta feed/historia, encoding de la URL de ML, q=95.

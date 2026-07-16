@@ -70,8 +70,14 @@ export function maxResPicture(url) {
   return url.replace(/-O\.(jpe?g|webp|png)$/i, '-F.jpg')
 }
 
+// URL del compositor propio (fondo = misma foto blurreada, spec Parte 5).
+export function blurImageUrl(publicUrl, url, story = false) {
+  return `${publicUrl}/ig/img?u=${encodeURIComponent(url)}${story ? '&s=1' : ''}`
+}
+
 // URL del proxy wsrv.nl que rellena con blanco hasta la proporción exacta de IG
 // (feed 1:1, historia 9:16) sin recortar. q=95 porque el default (~80) degrada visible.
+// Queda como fallback del compositor blur.
 export function padImageUrl(url, story = false) {
   return `https://wsrv.nl/?url=${encodeURIComponent(url)}` +
     `&w=1080&h=${story ? 1920 : 1080}&fit=contain&cbg=white&output=jpg&q=95`

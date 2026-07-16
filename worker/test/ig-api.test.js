@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { getMetaToken, igPublishImage, fetchOnlineFollowers, maybeRefreshMetaToken } from '../ig-api.js'
 import { FakeDB } from './fake-db.js'
 
-const envBase = () => ({ IG_USER_ID: '17841400000000000', META_APP_ID: 'app1', META_APP_SECRET: 'sec1', DB: new FakeDB() })
+const envBase = () => ({ IG_USER_ID: '17841400000000000', META_APP_ID: 'app1', META_APP_SECRET: 'sec1', PUBLIC_URL: 'https://pub.test', DB: new FakeDB() })
 
 function stubFetch(handler) {
   const calls = []
@@ -61,30 +61,43 @@ function mockGraphOk() {
   return stubFetch(url => url.includes('/media_publish') ? okJson({ id: 'P1' }) : okJson({ id: 'C1' }))
 }
 
-test('igPublishImage: usa wsrv + variante -F.jpg para el feed', async () => {
+test('igPublishImage: usa el compositor blur propio con variante -F.jpg para el feed', async () => {
   const calls = mockGraphOk()
   const env = await makeEnv()
   await igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp', caption: 'hola' })
   const body = calls[0].opts.body
   const img = new URLSearchParams(body).get('image_url')
-  assert.ok(img.startsWith('https://wsrv.nl/?url='))
+  assert.ok(img.startsWith('https://pub.test/ig/img?u='))
   assert.ok(img.includes(encodeURIComponent('D_1-MLC2_072026-F.jpg')))
-  assert.ok(img.includes('h%3D1080') || img.includes('h=1080'))
+  assert.ok(!img.includes('s=1'))
 })
 
-test('igPublishImage: si wsrv falla reintenta con la URL original', async () => {
+test('igPublishImage story: el compositor recibe s=1', async () => {
+  const calls = mockGraphOk()
+  const env = await makeEnv()
+  await igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp', story: true })
+  const img = new URLSearchParams(calls[0].opts.body).get('image_url')
+  assert.ok(img.startsWith('https://pub.test/ig/img?u='))
+  assert.ok(img.endsWith('&s=1'))
+})
+
+test('igPublishImage: cadena de fallback blur → wsrv → URL original', async () => {
   let mediaCalls = 0
   const calls = stubFetch(url => {
     if (url.includes('/media_publish')) return okJson({ id: 'P1' })
     mediaCalls++
-    if (mediaCalls === 1) return { ok: true, json: async () => ({ error: { message: 'Media download failed: bad image url' } }) }
+    if (mediaCalls <= 2) return { ok: true, json: async () => ({ error: { message: 'Media download failed: bad image url' } }) }
     return okJson({ id: 'C1' })
   })
   const env = await makeEnv()
   const id = await igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp', caption: 'x' })
   assert.equal(id, 'P1')
+  const img1 = new URLSearchParams(calls[0].opts.body).get('image_url')
   const img2 = new URLSearchParams(calls[1].opts.body).get('image_url')
-  assert.equal(img2, 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp')
+  const img3 = new URLSearchParams(calls[2].opts.body).get('image_url')
+  assert.ok(img1.startsWith('https://pub.test/ig/img?u='))
+  assert.ok(img2.startsWith('https://wsrv.nl/?url='))
+  assert.equal(img3, 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp')
 })
 
 test('igPublishImage: si el error es rate-limit/token, NO reintenta y lanza', async () => {

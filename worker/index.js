@@ -363,6 +363,13 @@ export default {
       return handleTgAdmin(request, env, ctx)
     }
 
+    // ── Compositor de imágenes para IG (fondo blur; import dinámico para no
+    // cargar el WASM de photon en requests que no lo usan) ──
+    if (url.pathname === '/ig/img' && request.method === 'GET') {
+      const { igImageProxy } = await import('./ig-image.js')
+      return igImageProxy(request)
+    }
+
     if (!url.pathname.startsWith('/ml/')) {
       return new Response('Not found', { status: 404 })
     }

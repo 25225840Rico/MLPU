@@ -4,7 +4,7 @@
  * Worker no puede escribir secrets; se renueva vía fb_exchange_token.
  */
 
-import { maxResPicture, padImageUrl } from './ig-logic.js'
+import { maxResPicture, padImageUrl, blurImageUrl } from './ig-logic.js'
 
 const GRAPH = 'https://graph.facebook.com/v21.0'
 const REFRESH_AFTER_MS = 45 * 24 * 3600 * 1000 // renovar a los 45 días (expira a los 60)
@@ -65,14 +65,22 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
     return pub.id
   }
   if (raw) return attempt(imageUrl)
+  // Cadena: fondo blur propio → padding blanco wsrv → URL original. Solo se cae
+  // al siguiente eslabón ante errores de imagen/descarga; un rate-limit o token
+  // vencido fallaría igual en todos y duplicaría llamadas.
+  const best = maxResPicture(imageUrl)
   try {
-    return await attempt(padImageUrl(maxResPicture(imageUrl), story))
+    return await attempt(blurImageUrl(env.PUBLIC_URL, best, story))
   } catch (e) {
-    // Solo reintentar sin padding si el error parece de la imagen/descarga (wsrv caído,
-    // Graph no pudo bajarla); un rate-limit o token vencido fallaría igual y duplica llamadas.
     if (!esErrorDeImagen(e)) throw e
-    log('padding falló, reintento con la URL original:', e.message)
-    return attempt(imageUrl)
+    log('fondo blur falló, reintento con padding blanco:', e.message)
+    try {
+      return await attempt(padImageUrl(best, story))
+    } catch (e2) {
+      if (!esErrorDeImagen(e2)) throw e2
+      log('padding falló, reintento con la URL original:', e2.message)
+      return attempt(imageUrl)
+    }
   }
 }
 

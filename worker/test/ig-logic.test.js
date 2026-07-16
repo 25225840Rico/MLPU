@@ -65,3 +65,11 @@ test('padImageUrl: feed 1080x1080 con contain, fondo blanco y q=95', () => {
 test('padImageUrl: historia 1080x1920', () => {
   assert.ok(padImageUrl('https://x.com/f.jpg', true).includes('&w=1080&h=1920&fit=contain'))
 })
+
+test('blurImageUrl: arma la URL del compositor propio (feed e historia)', async () => {
+  const { blurImageUrl } = await import('../ig-logic.js')
+  assert.equal(blurImageUrl('https://pub.test', 'https://http2.mlstatic.com/a b.jpg'),
+    'https://pub.test/ig/img?u=https%3A%2F%2Fhttp2.mlstatic.com%2Fa%20b.jpg')
+  assert.equal(blurImageUrl('https://pub.test', 'https://x/f.jpg', true),
+    'https://pub.test/ig/img?u=https%3A%2F%2Fx%2Ff.jpg&s=1')
+})
