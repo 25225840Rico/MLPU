@@ -105,10 +105,7 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
       }
       const foto = item.pictures?.[0]?.secure_url
       if (!foto) throw new Error('el ítem no tiene fotos en ML')
-      const caption = buildCaption({
-        titulo: row.titulo, precio: row.precio,
-        link: row.permalink_ml || `https://articulo.mercadolibre.cl/${row.ml_item_id}`,
-      })
+      const caption = buildCaption({ titulo: row.titulo, precio: row.precio })
       const feedId  = await publishImage(env, { imageUrl: foto, caption })
       const storyId = await publishImage(env, { imageUrl: foto, story: true })
       await env.DB.prepare(

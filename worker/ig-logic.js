@@ -4,14 +4,15 @@
  */
 
 export const FALLBACK_WINDOWS = ['12:30', '20:00']
-export const HASHTAGS = '#repuestos #autos #desarme #repuestosusados #chile'
+export const HASHTAGS = '#hotwheels #matchbox #diecast #hotwheelschile #coleccionables #autosaescala #chile'
 
 export function fmtCLP(n) {
   return '$' + Math.round(Number(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
 
-export function buildCaption({ titulo, precio, link }) {
-  return `🔧 ${titulo}\n\n💰 ${fmtCLP(precio)}\n🟢 DISPONIBLE\n\n👉 Comprar: ${link}\n\n${HASHTAGS}`
+// Sin link de ML (pedido del usuario 2026-07-15): la compra se guía por DM.
+export function buildCaption({ titulo, precio }) {
+  return `🏎️ ${titulo}\n\n💰 ${fmtCLP(precio)} · 🟢 DISPONIBLE\n📦 Envíos a todo Chile\n📩 Pídelo por DM\n\n${HASHTAGS}`
 }
 
 // hourly: { '0': n, ..., '23': n } (seguidores conectados por hora, de insights).

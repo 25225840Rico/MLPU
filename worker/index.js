@@ -367,7 +367,7 @@ export default {
     // cargar el WASM de photon en requests que no lo usan) ──
     if (url.pathname === '/ig/img' && request.method === 'GET') {
       const { igImageProxy } = await import('./ig-image.js')
-      return igImageProxy(request)
+      return igImageProxy(request, env)
     }
 
     if (!url.pathname.startsWith('/ml/')) {

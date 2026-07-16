@@ -8,11 +8,12 @@ test('fmtCLP separa miles con punto', () => {
   assert.equal(fmtCLP(1250000), '$1.250.000')
 })
 
-test('buildCaption: título, precio, DISPONIBLE, link y hashtags en bloques', () => {
-  const c = buildCaption({ titulo: 'Llanta Bronco R15', precio: 12000, link: 'https://ml.cl/x' })
+test('buildCaption: título, precio, DISPONIBLE, DM y hashtags (sin link de ML)', () => {
+  const c = buildCaption({ titulo: '2021 Ford Bronco Matchbox', precio: 12000 })
   assert.equal(c,
-    '🔧 Llanta Bronco R15\n\n💰 $12.000\n🟢 DISPONIBLE\n\n👉 Comprar: https://ml.cl/x\n\n' +
-    '#repuestos #autos #desarme #repuestosusados #chile')
+    '🏎️ 2021 Ford Bronco Matchbox\n\n💰 $12.000 · 🟢 DISPONIBLE\n📦 Envíos a todo Chile\n📩 Pídelo por DM\n\n' +
+    '#hotwheels #matchbox #diecast #hotwheelschile #coleccionables #autosaescala #chile')
+  assert.ok(!c.includes('http'))
 })
 
 test('pickBestWindows elige las 2 mejores horas con separación mínima', () => {

@@ -73,22 +73,24 @@ Telegram existente no cambia.
   plan B si wsrv.nl desaparece.
 - **Cloudflare Images:** requiere zona/dominio propio o plan pago; sobredimensionado.
 
-## Parte 3 — Caption del feed (formato aprobado)
-
-`buildCaption` (ig-logic.js) pasa a producir, con línea en blanco entre bloques:
+## Parte 3 — Caption del feed (v2, 2026-07-15: sin link de ML, pedido del usuario)
 
 ```
-🔧 <TITULO>
+🏎️ <TITULO>
 
-💰 <PRECIO CLP>
-🟢 DISPONIBLE
+💰 <PRECIO CLP> · 🟢 DISPONIBLE
+📦 Envíos a todo Chile
+📩 Pídelo por DM
 
-👉 Comprar: <link ML>
-
-#repuestos #autos #desarme #repuestosusados #chile
+#hotwheels #matchbox #diecast #hotwheelschile #coleccionables #autosaescala #chile
 ```
 
-La historia no lleva caption (limitación de la Graph API, sin cambio).
+(Hashtags corregidos al rubro real: Hotwheels/Matchbox, no repuestos.)
+La historia no lleva caption ni link: la Graph API NO soporta stickers de link
+en historias (solo manual desde la app). En su lugar, el compositor estampa un
+banner "DISPONIBLE" (pill verde, `worker/public/ig/disponible.png`, generado
+con `scripts/gen-disponible-banner.py`) centrado a ~230 px del borde inferior,
+solo en historias (`s=1`), leído vía binding `env.ASSETS`.
 
 ## Parte 4 — Historia promocional `/ig promo` (imagen aprobada por el usuario)
 

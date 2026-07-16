@@ -13,7 +13,8 @@ export function canvasSize(story = false) {
 
 // Compone el JPEG final (Uint8Array) a partir de los bytes de la foto original.
 // El blur del fondo se hace barato: downscale 1/8 + gaussian chico + upscale.
-export function composeBlur(bytes, story = false) {
+// bannerBytes (PNG con alfa, opcional): se estampa centrado abajo (historias).
+export function composeBlur(bytes, story = false, bannerBytes = null) {
   const { W, H } = canvasSize(story)
   const src = PhotonImage.new_from_byteslice(bytes)
   const sw = src.get_width(), sh = src.get_height()
@@ -31,14 +32,25 @@ export function composeBlur(bytes, story = false) {
   const fg = resize(src, fw, fh, SamplingFilter.CatmullRom)
   watermark(canvas, fg, BigInt(Math.round((W - fw) / 2)), BigInt(Math.round((H - fh) / 2)))
 
+  const toFree = [src, small, bgBig, fg]
+  if (bannerBytes) {
+    const banner = PhotonImage.new_from_byteslice(bannerBytes)
+    // centrado, a ~230 px del borde inferior (sobre la zona segura de la UI de IG)
+    watermark(canvas, banner,
+      BigInt(Math.round((W - banner.get_width()) / 2)),
+      BigInt(H - banner.get_height() - 230))
+    toFree.push(banner)
+  }
+
   const out = canvas.get_bytes_jpeg(90)
-  for (const im of [src, small, bgBig, canvas, fg]) im.free()
+  toFree.push(canvas)
+  for (const im of toFree) im.free()
   return out
 }
 
 // GET /ig/img?u=<url mlstatic encodeada>[&s=1] — no es un proxy abierto:
-// solo acepta fotos del CDN de ML.
-export async function igImageProxy(request) {
+// solo acepta fotos del CDN de ML. En historias estampa el banner DISPONIBLE.
+export async function igImageProxy(request, env) {
   const url = new URL(request.url)
   let src
   try { src = new URL(url.searchParams.get('u') || '') } catch { return new Response('u inválida', { status: 400 }) }
@@ -48,7 +60,14 @@ export async function igImageProxy(request) {
   const r = await fetch(src, { cf: { cacheTtl: 86400, cacheEverything: true } })
   if (!r.ok) return new Response(`no pude bajar la imagen (${r.status})`, { status: 502 })
   const bytes = new Uint8Array(await r.arrayBuffer())
-  const jpeg = composeBlur(bytes, story)
+
+  let bannerBytes = null
+  if (story && env?.ASSETS) {
+    // el banner vive en los static assets del propio Worker (env.ASSETS)
+    const b = await env.ASSETS.fetch(new Request(`${url.origin}/ig/disponible.png`))
+    if (b.ok) bannerBytes = new Uint8Array(await b.arrayBuffer())
+  }
+  const jpeg = composeBlur(bytes, story, bannerBytes)
   return new Response(jpeg, {
     headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' },
   })

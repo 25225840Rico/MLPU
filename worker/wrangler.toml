@@ -44,3 +44,4 @@ crons = ["*/30 * * * *", "0 10 * * *"]
 # el resto sigue yendo al fetch handler de index.js.
 [assets]
 directory = "./public"
+binding = "ASSETS"
