@@ -1,9 +1,12 @@
 /**
  * [IG] Cola de publicaciones a Instagram y orquestación de los crons.
- * runIgPublisher: corre cada 15 min. Dos modos:
- *  - goteo automático (/ig auto N): 1 producto cada N min, 09:00–23:00 Chile,
- *    hasta vaciar la cola (corridas cortas = confiables);
+ * runIgPublisher: corre cada minuto. Tres modos:
+ *  - rush (/ig rush): subida masiva inmediata — tandas cortas encadenadas
+ *    (~2 productos/min) hasta llenar el cupo diario real de Meta; avisa la
+ *    hora de reapertura y "duerme" hasta entonces sin gastar Graph API;
+ *  - goteo (/ig auto N): 1 producto cada N min, hasta vaciar la cola;
  *  - ventanas (clásico): una corrida por ventana óptima, tope 3 productos.
+ * Todos solo 09:00–23:00 Chile; corridas cortas = confiables.
  * Robustez anti-duplicados (post-mortem 2026-07-15): claim atómico por fila
  * (estado 'publicando'), feed idempotente (ig_media_id se guarda apenas sale),
  * historia best-effort (su fallo no repite el feed), lock entre corridas y
@@ -90,15 +93,18 @@ function parseDbUtc(s) {
 }
 
 // Cupo lleno: estima cuándo se libera (el post más viejo dentro de la ventana
-// móvil de 24 h expira a las +24 h) y avisa UNA vez por episodio (el flag
-// rush_avisado se borra al volver a publicar).
+// móvil de 24 h expira a las +24 h), guarda la estimación en rush_avisado —que
+// además hace de "siesta": hasta esa hora los ticks no consultan más a Meta— y
+// avisa UNA vez por episodio (si el flag ya existía, solo corre la estimación
+// en silencio). El flag se borra al volver a publicar.
 async function avisarCupoLleno(env, now, quota, notify) {
-  if (await getConfig(env.DB, 'rush_avisado')) return
+  const previo = await getConfig(env.DB, 'rush_avisado')
   const row = await env.DB.prepare(
     "SELECT MIN(publicado_en) m FROM ig_queue WHERE publicado_en > datetime('now','-24 hours')").first()
   const reabre = new Date((row?.m ? parseDbUtc(row.m) + 24 * 3600e3 : now.getTime() + 3600e3) + 5 * 60e3)
-  const fueraDeHorario = !enHorarioAuto(reabre)
   await setConfig(env.DB, 'rush_avisado', { reabre: reabre.toISOString() })
+  if (previo) return
+  const fueraDeHorario = !enHorarioAuto(reabre)
   await notify(`🚦 Cupo diario de Meta lleno (${quota.usados}/${quota.total} en 24 h). ` +
     `El rush retoma solo ~${horaChile(reabre)}${fueraDeHorario ? ' (ajustado al horario 09:00–23:00)' : ''} hora de Chile. No tienes que hacer nada.`)
 }
@@ -135,7 +141,7 @@ async function getItemDefault(env, mlItemId) {
 // Lock consultivo entre corridas (cron + /ig ahora): evita que dos corridas
 // trabajen a la vez. No es atómico, pero el claim por fila de abajo sí lo es,
 // así que aun en el peor caso no puede haber publicaciones duplicadas.
-const LOCK_TTL_MS = 5 * 60 * 1000
+const LOCK_TTL_MS = 3 * 60 * 1000
 async function acquireLock(env) {
   const lock = await getConfig(env.DB, 'corriendo')
   if (lock?.hasta && Date.parse(lock.hasta) > Date.now()) return false
@@ -159,7 +165,7 @@ async function claimNext(env) {
 async function recoverStuck(env) {
   await env.DB.prepare(
     `UPDATE ig_queue SET estado='pendiente'
-     WHERE estado='publicando' AND claimed_en < datetime('now', '-15 minutes')`).run()
+     WHERE estado='publicando' AND claimed_en < datetime('now', '-10 minutes')`).run()
 }
 
 // Publica UNA fila ya reclamada: feed idempotente (si un intento anterior ya
@@ -210,9 +216,16 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
   if (!force) {
     auto = await getAuto(env)
     if (auto?.rush) {
-      // Modo rush: exprime el cupo diario de Meta en tandas cortas de 3 por
-      // tick (corridas largas en un solo invoke morían a mitad de camino).
+      // Modo rush: subida masiva inmediata. El cron corre cada minuto y cada
+      // tick sube una tanda corta (corridas largas en un solo invoke morían a
+      // mitad de camino): encadenados dan ~2 productos/min hasta llenar el
+      // cupo diario de Meta. Guardas baratas primero para que los ticks
+      // sobrantes no le peguen a la Graph API.
       if (!enHorarioAuto(now)) return { publicados: 0 }
+      const pend = await env.DB.prepare("SELECT COUNT(*) n FROM ig_queue WHERE estado='pendiente'").first()
+      if (!pend?.n) return { publicados: 0 }
+      const siesta = await getConfig(env.DB, 'rush_avisado')
+      if (siesta?.reabre && Date.parse(siesta.reabre) > now.getTime()) return { publicados: 0, cupoLleno: true }
       const quota = await (deps.getQuota || fetchPublishingQuota)(env)
       const cupo = Math.floor((quota.total - quota.usados - RUSH_RESERVA) / 2) // feed+historia = 2
       if (cupo < 1) {

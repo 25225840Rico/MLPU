@@ -310,7 +310,19 @@ test('rush: cupo lleno → avisa hora de reapertura UNA vez y no publica', async
   assert.match(avisos[0], /\d{2}:\d{2}/) // hora estimada de reapertura
 })
 
-test('rush: al liberarse el cupo publica y rearma el aviso', async () => {
+test('rush: cupo lleno → siesta sin pegarle a la Graph API hasta la reapertura', async () => {
+  const env = mkEnv()
+  await enqueueIg(env, item)
+  await setRush(env)
+  let consultas = 0
+  const deps = { ...okDeps(), getQuota: async () => { consultas++; return { usados: 99, total: 100 } } }
+  await runIgPublisher(env, { now: enHorario, deps })     // lleno → aviso + flag con reabre futuro
+  const r = await runIgPublisher(env, { now: enHorario, deps })
+  assert.equal(r.cupoLleno, true)
+  assert.equal(consultas, 1) // el segundo tick durmió: no volvió a consultar el cupo
+})
+
+test('rush: al reabrirse el cupo publica y rearma el aviso', async () => {
   const env = mkEnv()
   for (const n of [1, 2]) await enqueueIg(env, { ...item, mlItemId: 'MLC' + n })
   await setRush(env)
@@ -320,8 +332,11 @@ test('rush: al liberarse el cupo publica y rearma el aviso', async () => {
   const opts = { now: enHorario, deps, notify: async t => avisos.push(t) }
   await runIgPublisher(env, opts)                    // lleno → aviso 1
   usados = 10
+  // pasó la hora estimada de reapertura → el gate deja consultar de nuevo
+  await env.DB.seedConfig('rush_avisado', JSON.stringify({ reabre: new Date(enHorario.getTime() - 1000).toISOString() }))
   assert.equal((await runIgPublisher(env, opts)).publicados, 2) // se liberó → publica y borra flag
   usados = 99
+  await enqueueIg(env, { ...item, mlItemId: 'MLC3' }) // con cola vacía el rush ni consulta el cupo
   await runIgPublisher(env, opts)                    // lleno de nuevo → aviso 2
   assert.equal(avisos.filter(a => /Cupo diario/.test(a)).length, 2)
 })

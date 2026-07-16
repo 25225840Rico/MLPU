@@ -64,13 +64,13 @@ const MAIN_KB = {
     [{ text: '🤖 Analizar' }],
     [{ text: '📸 Catalogar' }, { text: '📦 Despacho' }],
     [{ text: '🧾 Órdenes' }, { text: '📋 Historial' }],
-    [{ text: '💬 Mensajes' }, { text: 'ℹ️ Ayuda' }],
-    [{ text: '🧹 Limpiar' }],
+    [{ text: '📸 Instagram' }, { text: '💬 Mensajes' }],
+    [{ text: '🧹 Limpiar' }, { text: 'ℹ️ Ayuda' }],
   ],
   resize_keyboard: true,
 }
 const isButtonLabel = (t) =>
-  ['🤖 Analizar', '📸 Catalogar', '📦 Despacho', '📋 Historial', '💬 Mensajes', '🧾 Órdenes', '📭 Pendientes', 'ℹ️ Ayuda', '🧹 Limpiar'].includes(t)
+  ['🤖 Analizar', '📸 Catalogar', '📦 Despacho', '📋 Historial', '💬 Mensajes', '🧾 Órdenes', '📭 Pendientes', 'ℹ️ Ayuda', '🧹 Limpiar', '📸 Instagram'].includes(t)
 
 // ── Webhook receiver ─────────────────────────────────────────
 export async function handleTelegramWebhook(request, env, ctx) {
@@ -112,7 +112,7 @@ export async function handleTelegramWebhook(request, env, ctx) {
       if (chatId != null && !(await isAllowed(env, chatId))) {
         return requestAccess(env, chatId, msg?.from || update.callback_query?.from)
       }
-      if (update.callback_query)   await handleCallback(env, update.callback_query)
+      if (update.callback_query)   await handleCallback(env, update.callback_query, ctx)
       else if (msg?.photo?.length) await handlePhoto(env, msg)
       else if (msg?.text)          await handleTextCommand(env, msg, ctx)
     } catch (e) {
@@ -255,6 +255,7 @@ async function handleTextCommand(env, msg, ctx) {
   if (text === '📭 Pendientes') return sendPendingList(env, chatId)
   if (text === '📋 Historial')  return sendHistoryMenu(env, chatId)
   if (text === '💬 Mensajes')   return sendMessagesMenu(env, chatId)
+  if (text === '📸 Instagram')  return sendIgPanel(env, chatId)
   if (text === '🧹 Limpiar')    return clearChat(env, chatId, msg.message_id)
   if (text === '/historial')    return sendMlLast(env, chatId, 0)
   if (text.startsWith('/buscar ')) return runMlSearch(env, chatId, text.slice(8).trim())
@@ -326,7 +327,7 @@ async function sendStart(env, chatId) {
     '📦 Despacho — foto del sticker para asignar tracking.\n' +
     '🧾 Órdenes · 📋 Historial — ventas reales de ML.\n' +
     '💬 Mensajes — directo, conversación y plantillas.\n' +
-    '📸 /ig — Instagram: stock, cola, quitar, vaciar, ahora, parar, seguir, horas, promo.\n\n' +
+    '📸 Instagram — panel con botones: rush, goteo, cola, stock, pausa, promo.\n\n' +
     '🔑 Si se corta la conexión con ML, te aviso por acá y reconectás pegando el código.',
     { reply_markup: MAIN_KB })
 }
@@ -392,18 +393,47 @@ async function doFinalize(env, chatId) {
   return finalizeEvidence(env, chatId, p)
 }
 
-// ── Instagram: cola y ventanas ─────────────────────────────────
+// ── Instagram: panel de botones, cola y modos ─────────────────
+// Todo se maneja desde el panel (botón 📸 Instagram o /ig); los subcomandos
+// /ig … siguen funcionando por texto para quien los prefiera.
+const IG_PANEL_KB = { inline_keyboard: [
+  [{ text: '🔥 Rush YA', callback_data: 'igm:rush' }, { text: '🚿 Goteo 90m', callback_data: 'igm:goteo' }],
+  [{ text: '⏸ Pausar', callback_data: 'igm:parar' }, { text: '▶️ Seguir', callback_data: 'igm:seguir' }],
+  [{ text: '📋 Ver cola', callback_data: 'igm:cola' }, { text: '📦 Cargar stock', callback_data: 'igm:stock' }],
+  [{ text: '🚀 Subir 3 ahora', callback_data: 'igm:ahora' }, { text: '📢 Historia promo', callback_data: 'igm:promo' }],
+  [{ text: '⛔ Modo off', callback_data: 'igm:off' }, { text: '🔄 Actualizar', callback_data: 'igm:panel' }],
+] }
+
+export async function sendIgPanel(env, chatId) {
+  const [auto, pausado, pend, pub] = await Promise.all([
+    getAuto(env), isPausado(env),
+    env.DB.prepare("SELECT COUNT(*) n FROM ig_queue WHERE estado='pendiente'").first(),
+    env.DB.prepare("SELECT COUNT(*) n FROM ig_queue WHERE estado='publicado'").first(),
+  ])
+  const modo = pausado ? '⏸ PAUSADO'
+    : auto?.rush ? '🔥 RUSH (subida masiva hasta llenar el cupo diario)'
+    : auto?.intervalo_min ? `🚿 Goteo: 1 cada ~${auto.intervalo_min} min`
+    : '🕐 Por ventanas (clásico)'
+  return tgSend(env, chatId,
+    `📸 <b>Panel de Instagram</b> — @topwheels.cl\n\n` +
+    `Modo: <b>${modo}</b>\nCola: <b>${pend?.n ?? 0} pendientes</b> · ${pub?.n ?? 0} publicados\n` +
+    `Horario de publicación: 09:00–23:00 (Chile)`,
+    { reply_markup: IG_PANEL_KB })
+}
+
 async function handleIgCommand(env, chatId, args, ctx) {
   const notify = t => tgSend(env, chatId, t)
   const [sub, ...rest] = args.split(/\s+/).filter(Boolean)
 
-  if (sub === 'cola' || !sub) {
-    const pausada = await isPausado(env) ? '⏸ <b>PAUSADO</b> (reanudar: /ig seguir)\n\n' : ''
+  if (!sub) return sendIgPanel(env, chatId)
+  if (sub === 'cola') {
+    const pausada = await isPausado(env) ? '⏸ <b>PAUSADO</b> (reanudar: botón ▶️ Seguir)\n\n' : ''
     const rows = await listPendientes(env)
-    if (!rows.length) return tgSend(env, chatId, `${pausada}📭 La cola de Instagram está vacía. Cargar inventario: /ig stock`)
+    const kb = { inline_keyboard: [[{ text: '🎛 Panel', callback_data: 'igm:panel' }]] }
+    if (!rows.length) return tgSend(env, chatId, `${pausada}📭 La cola de Instagram está vacía. Cargar inventario: 📦 Cargar stock`, { reply_markup: kb })
     const lines = rows.map((r, i) =>
       `${i + 1}. <code>${r.id}</code> ${esc(r.titulo)} — ${fmtCLP(r.precio)}${r.intentos ? ` (${r.intentos} intento/s fallido/s)` : ''}`)
-    return tgSend(env, chatId, `${pausada}📸 <b>Cola de Instagram (${rows.length})</b>\n\n${lines.join('\n')}\n\nQuitar: /ig quitar &lt;id&gt; · Publicar ya: /ig ahora`)
+    return tgSend(env, chatId, `${pausada}📸 <b>Cola de Instagram (${rows.length})</b>\n\n${lines.join('\n')}\n\nQuitar uno: /ig quitar &lt;id&gt;`, { reply_markup: kb })
   }
   if (sub === 'stock') {
     await tgSend(env, chatId, '⏳ Revisando el inventario activo en ML…')
@@ -492,8 +522,8 @@ async function handleIgCommand(env, chatId, args, ctx) {
       cupoTxt = `\nCupo de Meta ahora: ${q.usados}/${q.total} usados en 24 h → puedo subir ~${items} producto(s) más hoy (feed+historia = 2 c/u).`
     } catch { /* el estado del cupo es informativo; el rush igual queda activo */ }
     return tgSend(env, chatId,
-      `🔥 Modo RUSH activado: subo 3 productos cada 15 min (09:00–23:00 Chile) hasta llenar el cupo diario de Meta; ` +
-      `cuando se llene te aviso a qué hora se reabre y sigo solo.${cupoTxt}\nApagar: /ig rush off · Goteo suave: /ig auto 90`)
+      `🔥 Modo RUSH activado: subida masiva YA (~2 productos por minuto, 09:00–23:00 Chile) hasta llenar el cupo diario de Meta; ` +
+      `cuando se llene te aviso a qué hora se reabre y sigo solo al día siguiente.${cupoTxt}\nApagar: /ig rush off · Goteo suave: /ig auto 90`)
   }
   if (sub === 'promo') {
     return tgApi(env, 'sendPhoto', {
@@ -566,11 +596,20 @@ async function sendBuyerMessageManual(env, chatId, orderId, body) {
 }
 
 // ── Botones inline (callback_query) ──────────────────────────
-async function handleCallback(env, cq) {
+async function handleCallback(env, cq, ctx) {
   const chatId = cq.message?.chat?.id
   const data = cq.data || ''
   try { await tgApi(env, 'answerCallbackQuery', { callback_query_id: cq.id }) } catch {}
   if (!chatId) return
+  // Panel de Instagram: cada botón equivale a un subcomando /ig.
+  if (data.startsWith('igm:')) {
+    const acc = data.slice(4)
+    if (acc === 'panel') return sendIgPanel(env, chatId)
+    const map = { rush: 'rush', goteo: 'auto 90', parar: 'parar', seguir: 'seguir',
+                  cola: 'cola', stock: 'stock', ahora: 'ahora 3', promo: 'promo', off: 'auto off' }
+    if (map[acc]) return handleIgCommand(env, chatId, map[acc], ctx)
+    return
+  }
   if (data === 'ord')  return sendOrdersList(env, chatId)
   if (data === 'pend') return sendPendingList(env, chatId)
   if (data === 'si')   return doConfirmYes(env, chatId)

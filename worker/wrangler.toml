@@ -28,12 +28,13 @@ binding = "DB"
 database_name = "mlpu-db"
 database_id = "5145a70c-1c25-4904-a63a-4021b3bd19db"
 
-# Crons de MLPU-Instagram: */15 = publisher (ventanas o goteo automático,
-# 1 ítem por tick para que cada corrida sea corta y confiable); 0 10 UTC =
-# ventanas del día + renovación del token de Meta. El scheduler post-venta
-# sigue APAGADO (scheduled() ya no lo invoca; ver index.js).
+# Crons de MLPU-Instagram: cada minuto corre el publisher (tandas cortas y
+# confiables; en rush eso da subida continua ~2 ítems/min hasta llenar el cupo
+# diario; en goteo/ventanas los ticks sobrantes salen gratis tras 1-2 reads de
+# D1). 0 10 UTC = ventanas del día + renovación del token de Meta. El scheduler
+# post-venta sigue APAGADO (scheduled() ya no lo invoca; ver index.js).
 [triggers]
-crons = ["*/15 * * * *", "0 10 * * *"]
+crons = ["* * * * *", "0 10 * * *"]
 
 # Secrets (NO van aquí, configurar con):
 #   wrangler secret put ML_CLIENT_ID
