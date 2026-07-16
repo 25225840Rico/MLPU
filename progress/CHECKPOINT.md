@@ -1,11 +1,12 @@
 # CHECKPOINT — MLPU
 
-**Última sesión:** 2026-07-16 (sesión 14) | **Rama:** main (cd8d257, SIN push) |
-**Worker Version:** 0d4712e2 | **Webhook:** ACTIVO | **Crons:** */30 (IG publisher) + 0 10 UTC (IG daily) | **Tests:** 46/46
+**Última sesión:** 2026-07-16 (sesión 14) | **Rama:** main (af09e1d, pusheado) |
+**Worker Version:** 60bd0749 | **Webhook:** ACTIVO | **Crons:** */15 (IG publisher) + 0 10 UTC (IG daily) | **Tests:** 51/51
 
-## Fase actual: MLPU-INSTAGRAM — FIX ANTI-DUPLICADOS DESPLEGADO
-El 15/07 la prueba real duplicó posts en el feed y dejó filas inconsistentes.
-Post-mortem completo + fix en producción. Falta la prueba real del usuario.
+## Fase actual: MLPU-INSTAGRAM — GOTEO AUTOMÁTICO EN PRODUCCIÓN
+Fix anti-duplicados + modo `/ig auto` desplegados. **modo_auto ACTIVO: 90 min**
+(1 producto cada ~90 min, 09:00–23:00 Chile, hasta vaciar los 133 pendientes).
+Falta confirmar el primer goteo real (~12:45 Chile del 16/07).
 
 ## Qué se completó esta sesión (2026-07-16)
 1. **Diagnóstico con evidencia** (D1 + Graph API): 3 causas raíz —
@@ -22,19 +23,27 @@ Post-mortem completo + fix en producción. Falta la prueba real del usuario.
    real; ids 2-3 reseteados a pendiente. Estado: 134 pendientes · 10 publicados · 0 error.
 4. Tests 40→46 (6 nuevos anti-duplicados); FakeDB extendido.
 
+## Qué se completó (parte 2, mismo día)
+`/ig ahora 5` moría: Cloudflare corta el background del webhook (~50 s) → lock
+pegado y fila en 'publicando' (evidencia D1: id 2 salió UNA vez — el fix
+anti-duplicados funcionó — y murió reclamando id 3). Solución: **goteo por cron**
+(`/ig auto <min>` / `off`, 1 por tick, corridas cortas = confiables), cron */15,
+lock TTL 5 min, aviso al vaciar la cola. Commit af09e1d, deploy 60bd0749.
+
 ## PRÓXIMO paso accionable
-1. `git push` (commit cd8d257 quedó local).
-2. Prueba real (t.me/Pulicadorlibre_bot): `/ig ahora 1` → verificar feed+historia
-   en @topwheels.cl sin duplicados; mandar `/ig ahora` dos veces seguidas debe
-   responder "ya hay una publicación en curso".
-3. **SEGURIDAD (heredado s13)**: rotar App Secret en panel Meta →
+1. Verificar el primer goteo real (tarea background butw1u5gw consulta D1 tras
+   ~16:45 UTC; también deben llegar avisos "📸 Subido a IG" por Telegram).
+2. **SEGURIDAD (heredado s13)**: rotar App Secret en panel Meta →
    `wrangler secret put META_APP_SECRET`.
-4. Decidir si re-publicar la Tundra (id 4): DB dice publicado pero el usuario
+3. Decidir si re-publicar la Tundra (id 4): DB dice publicado pero el usuario
    borró el post del feed.
 
 ## Decisiones clave de esta fase
 - Historia es best-effort: nunca justifica repetir el feed.
 - Claim por fila = garantía dura anti-duplicados; lock global = solo UX.
+- Tandas largas en un invoke = frágiles; goteo 1/tick por cron = robusto.
+- Intervalo 90 min por el límite de Meta (~25 posts por API/24h, feed+historia
+  cuentan): ~9 ítems/día. El usuario puede ajustar con /ig auto NN (mín 15).
 - Cadena de imagen blur→wsrv→original se mantiene (no era la causa).
 
 ## Bloqueos

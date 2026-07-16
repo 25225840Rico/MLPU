@@ -1,5 +1,20 @@
-SAVE — MLPU (2026-07-16, sesión 14 — cierre)
-FIX ANTI-DUPLICADOS IG DESPLEGADO (commit cd8d257 SIN push, deploy 0d4712e2, 46/46 tests).
+SAVE — MLPU (2026-07-16, sesión 14 — parte 2)
+GOTEO AUTOMÁTICO IG EN PRODUCCIÓN (commit af09e1d pusheado, deploy 60bd0749,
+51/51 tests, cron */15). modo_auto ACTIVO: 1 producto cada ~90 min, 09:00–23:00
+Chile, hasta vaciar los 133 pendientes; avisa por Telegram en cada uno y al
+vaciarse. Comandos: /ig auto [min|off], /ig ahora [n] sigue para manual.
+POR QUÉ: /ig ahora 5 moría (~50 s) — Cloudflare corta el background del webhook;
+lock quedaba pegado ("ya hay una en curso"). Tandas largas = frágiles; goteo
+1/tick por cron = robusto. Intervalo 90 por límite Meta ~25 posts API/24h.
+PRÓXIMO PASO AL RETOMAR: confirmar que el goteo corre solo (avisos "📸 Subido
+a IG" cada ~90 min; en D1: SELECT MAX(publicado_en) FROM ig_queue) y que no
+haya filas en 'publicando' viejas ni 'error'.
+PENDIENTE: rotar App Secret Meta + wrangler secret put META_APP_SECRET (s13);
+decidir re-publicar Tundra (id 4, usuario borró su post del feed).
+Detalle: progress/CHECKPOINT.md · progress/log/2026-07-16.md
+
+SAVE — MLPU (2026-07-16, sesión 14 — cierre parte 1)
+FIX ANTI-DUPLICADOS IG DESPLEGADO (commit cd8d257, deploy 0d4712e2, 46/46 tests).
 Ayer se duplicaron posts: (1) si la historia fallaba, el reintento re-subía el
 MISMO feed; (2) /ig ahora repetido o cruzado con el cron publicaba las mismas
 filas; (3) poll de Meta de 15 s → "Media ID is not available".
