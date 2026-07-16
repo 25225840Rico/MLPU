@@ -58,6 +58,15 @@ export function isInWindow(date, windows, tz = 'America/Santiago') {
   return activeWindow(date, windows, tz) !== null
 }
 
+// Horario permitido del modo automático (goteo): 09:00–22:59 hora de Chile,
+// para no publicar de madrugada (se ve bot y rinde peor).
+export const AUTO_DESDE_MIN = 9 * 60
+export const AUTO_HASTA_MIN = 23 * 60
+export function enHorarioAuto(date, tz = 'America/Santiago') {
+  const { minutos } = localParts(date, tz)
+  return minutos >= AUTO_DESDE_MIN && minutos < AUTO_HASTA_MIN
+}
+
 // Clave única de la ventana activa (para correr UNA vez por ventana): 'YYYY-MM-DDTHH:MM'.
 export function windowKey(date, windows, tz = 'America/Santiago') {
   const w = activeWindow(date, windows, tz)

@@ -1,7 +1,9 @@
 /**
  * [IG] Cola de publicaciones a Instagram y orquestación de los crons.
- * runIgPublisher: corre cada 30 min; solo actúa dentro de una ventana óptima,
- * una vez por ventana y con tope de 3 productos.
+ * runIgPublisher: corre cada 15 min. Dos modos:
+ *  - goteo automático (/ig auto N): 1 producto cada N min, 09:00–23:00 Chile,
+ *    hasta vaciar la cola (corridas cortas = confiables);
+ *  - ventanas (clásico): una corrida por ventana óptima, tope 3 productos.
  * Robustez anti-duplicados (post-mortem 2026-07-15): claim atómico por fila
  * (estado 'publicando'), feed idempotente (ig_media_id se guarda apenas sale),
  * historia best-effort (su fallo no repite el feed), lock entre corridas y
@@ -9,7 +11,7 @@
  * runIgDaily: recalcula ventanas desde insights y renueva el token de Meta.
  * enqueueStock: carga inicial con el inventario activo ya publicado en ML.
  */
-import { buildCaption, windowKey, pickBestWindows, FALLBACK_WINDOWS } from './ig-logic.js'
+import { buildCaption, windowKey, pickBestWindows, enHorarioAuto, FALLBACK_WINDOWS } from './ig-logic.js'
 import { igPublishImage, fetchOnlineFollowers, maybeRefreshMetaToken } from './ig-api.js'
 import { mlFetch } from './ml-fetch.js'
 
@@ -61,6 +63,29 @@ export async function isPausado(env) {
   return !!(await getConfig(env.DB, 'pausado'))
 }
 
+// Modo automático (goteo): el cron publica 1 producto cada intervalo_min
+// minutos (mínimo 15 = frecuencia del cron), solo entre 09:00 y 23:00 Chile,
+// hasta vaciar la cola. null = modo ventanas (comportamiento clásico).
+export async function getAuto(env) {
+  return getConfig(env.DB, 'modo_auto')
+}
+export async function setAuto(env, intervaloMin) {
+  if (!intervaloMin) return env.DB.prepare("DELETE FROM ig_config WHERE clave='modo_auto'").run()
+  return setConfig(env.DB, 'modo_auto', { intervalo_min: intervaloMin, desde: new Date().toISOString() })
+}
+
+// ¿Le toca publicar al goteo? Compara contra la última publicación real
+// (MAX(publicado_en), UTC) con 5 min de gracia para que el redondeo a ticks
+// del cron no corra el intervalo hacia arriba.
+async function tocaGotear(env, now, intervaloMin) {
+  if (!enHorarioAuto(now)) return false
+  const row = await env.DB.prepare('SELECT MAX(publicado_en) m FROM ig_queue').first()
+  if (!row?.m) return true
+  const s = String(row.m).replace(' ', 'T')
+  const ultima = Date.parse(s.endsWith('Z') ? s : s + 'Z')
+  return now.getTime() - ultima >= (intervaloMin - 5) * 60000
+}
+
 export async function setPausado(env, on) {
   if (on) return setConfig(env.DB, 'pausado', { desde: new Date().toISOString() })
   await env.DB.prepare("DELETE FROM ig_config WHERE clave='pausado'").run()
@@ -83,7 +108,7 @@ async function getItemDefault(env, mlItemId) {
 // Lock consultivo entre corridas (cron + /ig ahora): evita que dos corridas
 // trabajen a la vez. No es atómico, pero el claim por fila de abajo sí lo es,
 // así que aun en el peor caso no puede haber publicaciones duplicadas.
-const LOCK_TTL_MS = 10 * 60 * 1000
+const LOCK_TTL_MS = 5 * 60 * 1000
 async function acquireLock(env) {
   const lock = await getConfig(env.DB, 'corriendo')
   if (lock?.hasta && Date.parse(lock.hasta) > Date.now()) return false
@@ -154,12 +179,21 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
   const getItem      = deps.getItem      || getItemDefault
   const { horas } = await getVentanas(env)
 
+  let auto = null
   if (!force) {
-    const key = windowKey(now, horas)
-    if (!key) return { publicados: 0 }
-    const ultima = await getConfig(env.DB, 'ultima_corrida')
-    if (ultima?.key === key) return { publicados: 0 } // ya corrió en esta ventana
-    await setConfig(env.DB, 'ultima_corrida', { key })
+    auto = await getAuto(env)
+    if (auto?.intervalo_min) {
+      // Modo automático: goteo de 1 por tick del cron. Trabajo corto = corrida
+      // confiable (las tandas largas en un solo invoke morían a mitad de camino).
+      if (!(await tocaGotear(env, now, auto.intervalo_min))) return { publicados: 0 }
+      max = 1
+    } else {
+      const key = windowKey(now, horas)
+      if (!key) return { publicados: 0 }
+      const ultima = await getConfig(env.DB, 'ultima_corrida')
+      if (ultima?.key === key) return { publicados: 0 } // ya corrió en esta ventana
+      await setConfig(env.DB, 'ultima_corrida', { key })
+    }
   }
 
   if (!(await acquireLock(env))) return { publicados: 0, enCurso: true }
@@ -184,6 +218,10 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
     }
   } finally {
     await releaseLock(env)
+  }
+  if (auto && publicados > 0) {
+    const resto = await env.DB.prepare("SELECT COUNT(*) n FROM ig_queue WHERE estado='pendiente'").first()
+    if (!resto?.n) await notify('📭 Goteo automático: la cola de Instagram quedó vacía. Recargar: /ig stock')
   }
   return { publicados }
 }

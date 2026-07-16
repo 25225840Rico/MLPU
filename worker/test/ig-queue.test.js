@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado } from '../ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto } from '../ig-queue.js'
 import { FakeDB } from './fake-db.js'
 
 const mkEnv = () => ({ DB: new FakeDB(), IG_USER_ID: 'IGU', TELEGRAM_CHAT_ID: '1', SELLER_ID: '283388639' })
@@ -217,6 +217,60 @@ test('/ig ahora respeta el máximo pedido', async () => {
   const r = await runIgPublisher(env, { force: true, deps: okDeps(), max: 5 })
   assert.equal(r.publicados, 5)
   assert.equal((await listPendientes(env)).length, 0)
+})
+
+// ── Modo automático (goteo): 1 por tick del cron, intervalo configurable ──
+// 2026-07-14T18:00Z = 14:00 Chile (dentro de 09-23); T07:00Z = 03:00 (fuera).
+const enHorario   = new Date('2026-07-14T18:00:00Z')
+const deMadrugada = new Date('2026-07-14T07:00:00Z')
+
+test('auto: el cron gotea 1 por tick, aunque haya varios pendientes', async () => {
+  const env = mkEnv()
+  for (const n of [1, 2, 3]) await enqueueIg(env, { ...item, mlItemId: 'MLC' + n })
+  await setAuto(env, 30)
+  const r = await runIgPublisher(env, { now: enHorario, deps: okDeps() })
+  assert.equal(r.publicados, 1)
+  assert.equal((await listPendientes(env)).length, 2)
+})
+
+test('auto: fuera de horario (madrugada Chile) no publica', async () => {
+  const env = mkEnv()
+  await enqueueIg(env, item)
+  await setAuto(env, 30)
+  const r = await runIgPublisher(env, { now: deMadrugada, deps: okDeps() })
+  assert.equal(r.publicados, 0)
+})
+
+test('auto: respeta el intervalo desde la última publicación', async () => {
+  const env = mkEnv()
+  await setAuto(env, 60)
+  env.DB.seedQueue({ ml_item_id: 'MLC9', titulo: 'ya salió', precio: 1, estado: 'publicado',
+    publicado_en: new Date(enHorario.getTime() - 10 * 60000).toISOString() }) // hace 10 min
+  await enqueueIg(env, item)
+  assert.equal((await runIgPublisher(env, { now: enHorario, deps: okDeps() })).publicados, 0)
+  // hace 58 min (>= 60-5 de gracia) → publica
+  env.DB.queue[0].publicado_en = new Date(enHorario.getTime() - 58 * 60000).toISOString()
+  assert.equal((await runIgPublisher(env, { now: enHorario, deps: okDeps() })).publicados, 1)
+})
+
+test('auto: avisa cuando la cola queda vacía', async () => {
+  const env = mkEnv()
+  await enqueueIg(env, item)
+  await setAuto(env, 30)
+  const avisos = []
+  await runIgPublisher(env, { now: enHorario, deps: okDeps(), notify: async t => avisos.push(t) })
+  assert.match(avisos.join(' '), /cola de Instagram quedó vacía/)
+})
+
+test('auto off: vuelve al modo por ventanas', async () => {
+  const env = mkEnv()
+  await enqueueIg(env, item)
+  await setAuto(env, 30)
+  await setAuto(env, 0)
+  assert.equal(await getAuto(env), null)
+  // 14:00 Chile no es ventana (fallback 12:30/20:00) → el cron no publica
+  const r = await runIgPublisher(env, { now: enHorario, deps: okDeps() })
+  assert.equal(r.publicados, 0)
 })
 
 test('enqueueStock: re-encola ítems cancelados (UPSERT), no los publicados', async () => {

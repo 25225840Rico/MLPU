@@ -22,7 +22,7 @@ import {
   analyzeProduct, clusterPhotos, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
   getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado } from './ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto } from './ig-queue.js'
 import { fmtCLP } from './ig-logic.js'
 import { igPublishImage } from './ig-api.js'
 
@@ -420,7 +420,7 @@ async function handleIgCommand(env, chatId, args, ctx) {
     const job = (async () => {
       try {
         const r = await runIgPublisher(env, { force: true, notify, max })
-        if (r.enCurso) return tgSend(env, chatId, '⏳ Ya hay una publicación en curso; no lancé otra (espera los avisos o reintenta en unos minutos).')
+        if (r.enCurso) return tgSend(env, chatId, '⏳ Ya hay una publicación en curso; no lancé otra. Si no llegan avisos, el candado se libera solo en ~5 min y podés reintentar.')
         if (r.pausado) return tgSend(env, chatId, `⏸ La cola está pausada${r.publicados ? ` (alcancé a publicar ${r.publicados})` : '; no publiqué nada'}. Reanudar: /ig seguir`)
         return tgSend(env, chatId, r.publicados ? `✅ Listo: ${r.publicados} producto(s) publicados en IG.` : 'No había nada publicable en la cola.')
       } catch (e) { return tgSend(env, chatId, `❌ IG falló: ${esc(e.message)}`) }
@@ -459,6 +459,24 @@ async function handleIgCommand(env, chatId, args, ctx) {
     const v = await getVentanas(env)
     return tgSend(env, chatId, `🕐 Ventanas vigentes: <b>${v.horas.join(', ')}</b> (origen: ${v.origen}).\nCambiar: /ig horas 12:30 20:00 · Automático: /ig horas auto`)
   }
+  if (sub === 'auto') {
+    if (rest[0] === 'off') {
+      await setAuto(env, 0)
+      return tgSend(env, chatId, '🚿 Goteo automático APAGADO. Vuelve el modo clásico por ventanas (/ig horas).')
+    }
+    if (rest[0]) {
+      const min = parseInt(rest[0], 10)
+      if (!min || min < 15) return tgSend(env, chatId, 'Formato: /ig auto 30 (minutos entre publicaciones, mínimo 15) · /ig auto off')
+      await setAuto(env, min)
+      return tgSend(env, chatId,
+        `🚿 Goteo automático ACTIVADO: 1 producto cada ~${min} min, de 09:00 a 23:00 (Chile), hasta vaciar la cola.\n` +
+        'Te aviso por acá cada vez que salga uno. Pausar: /ig parar · Apagar: /ig auto off')
+    }
+    const a = await getAuto(env)
+    return tgSend(env, chatId, a?.intervalo_min
+      ? `🚿 Goteo automático ACTIVO: 1 producto cada ~${a.intervalo_min} min (09:00–23:00 Chile). Apagar: /ig auto off`
+      : '🚿 Goteo automático apagado (rige el modo por ventanas). Activar: /ig auto 30')
+  }
   if (sub === 'promo') {
     return tgApi(env, 'sendPhoto', {
       chat_id: chatId,
@@ -471,7 +489,7 @@ async function handleIgCommand(env, chatId, args, ctx) {
       ]] },
     })
   }
-  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig ahora [n] · /ig parar · /ig seguir · /ig horas · /ig promo')
+  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig auto [min|off] · /ig ahora [n] · /ig parar · /ig seguir · /ig horas · /ig promo')
 }
 
 async function sendOrdersList(env, chatId) {

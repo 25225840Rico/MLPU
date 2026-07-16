@@ -73,6 +73,13 @@ function makeStmt(db, sql, args) {
     return { results: [] }
   }
   const first = async () => {
+    if (sql.includes('MAX(publicado_en)')) {
+      const fechas = db.queue.map(r => r.publicado_en).filter(Boolean).sort()
+      return { m: fechas[fechas.length - 1] ?? null }
+    }
+    if (sql.includes('COUNT(*)') && sql.includes("estado='pendiente'")) {
+      return { n: db.queue.filter(r => r.estado === 'pendiente').length }
+    }
     if (sql.includes('RETURNING') && sql.includes("SET estado='publicando'")) {
       // claimNext: toma atómicamente la primera fila pendiente
       const row = db.queue.filter(r => r.estado === 'pendiente').sort((a, b) => a.id - b.id)[0]
