@@ -453,7 +453,8 @@ async function handleIgCommand(env, chatId, args) {
   if (sub === 'promo') {
     return tgApi(env, 'sendPhoto', {
       chat_id: chatId,
-      photo: `${env.PUBLIC_URL}/ig/promo.png`,
+      // ?v= evita el caché por URL de Telegram/Meta cuando se regenera el PNG
+      photo: `${env.PUBLIC_URL}/ig/promo.png?v=${Date.now()}`,
       caption: '📢 Vista previa de la historia promocional. ¿La subo a Instagram?',
       reply_markup: { inline_keyboard: [[
         { text: '📤 Subir a historia', callback_data: 'ig:promo:go' },
@@ -535,7 +536,7 @@ async function handleCallback(env, cq) {
       { chat_id: chatId, message_id: cq.message.message_id, caption })
     try {
       // raw + sin chequear pausado: es una acción manual explícita y el PNG ya es 9:16.
-      await igPublishImage(env, { imageUrl: `${env.PUBLIC_URL}/ig/promo.png`, story: true, raw: true })
+      await igPublishImage(env, { imageUrl: `${env.PUBLIC_URL}/ig/promo.png?v=${Date.now()}`, story: true, raw: true })
       return edit('✅ Historia promocional publicada en Instagram.')
     } catch (e) {
       return edit(`❌ No pude publicar la promo: ${e.message.slice(0, 150)}. Tocá /ig promo para reintentar.`)
