@@ -34,18 +34,27 @@ function makeStmt(db, sql, args) {
     } else if (sql.includes('DELETE FROM ig_config')) {
       const clave = sql.match(/clave='([^']+)'/)?.[1] ?? args[0]
       changes = db.config.delete(clave) ? 1 : 0
-    } else if (sql.includes('UPDATE ig_queue') && sql.includes("WHERE estado='pendiente'") && !args.length) {
+    } else if (sql.includes('UPDATE ig_queue') && sql.includes("SET estado='cancelado'") && sql.includes("WHERE estado='pendiente'") && !args.length) {
       for (const r of db.queue) if (r.estado === 'pendiente') { r.estado = 'cancelado'; changes++ }
+    } else if (sql.includes('UPDATE ig_queue') && sql.includes("WHERE estado='publicando'")) {
+      // recoverStuck: filas reclamadas hace >15 min vuelven a pendiente
+      const limite = Date.now() - 15 * 60 * 1000
+      for (const r of db.queue)
+        if (r.estado === 'publicando' && Date.parse(r.claimed_en || 0) < limite) { r.estado = 'pendiente'; changes++ }
     } else if (sql.includes('UPDATE ig_queue')) {
       const id = args[args.length - 1]
       const row = db.queue.find(r => r.id === id)
       if (row) {
         changes = 1
         if (sql.includes("estado='publicado'")) {
-          Object.assign(row, { estado: 'publicado', ig_media_id: args[0], ig_story_id: args[1], publicado_en: new Date().toISOString() })
-        } else if (sql.includes('intentos=intentos+1')) {
-          row.intentos++; row.ultimo_error = args[0]
-          if (row.intentos >= 3) row.estado = 'error'
+          Object.assign(row, { estado: 'publicado', ultimo_error: args[0] ?? null, publicado_en: new Date().toISOString() })
+        } else if (sql.includes('SET ig_media_id=?')) {
+          row.ig_media_id = args[0]
+        } else if (sql.includes('SET ig_story_id=?')) {
+          row.ig_story_id = args[0]
+        } else if (sql.includes('CASE WHEN intentos>=')) {
+          row.ultimo_error = args[0]
+          row.estado = row.intentos >= 3 ? 'error' : 'pendiente'
         } else if (sql.includes("estado='cancelado'")) {
           if (sql.includes("estado='pendiente'") && row.estado !== 'pendiente') changes = 0
           else row.estado = 'cancelado'
@@ -64,6 +73,13 @@ function makeStmt(db, sql, args) {
     return { results: [] }
   }
   const first = async () => {
+    if (sql.includes('RETURNING') && sql.includes("SET estado='publicando'")) {
+      // claimNext: toma atómicamente la primera fila pendiente
+      const row = db.queue.filter(r => r.estado === 'pendiente').sort((a, b) => a.id - b.id)[0]
+      if (!row) return null
+      Object.assign(row, { estado: 'publicando', intentos: row.intentos + 1, claimed_en: new Date().toISOString() })
+      return { ...row }
+    }
     if (sql.includes('FROM ig_config')) {
       const v = db.config.get(args[0])
       return v === undefined ? null : { valor: v }

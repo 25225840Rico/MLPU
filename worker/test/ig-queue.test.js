@@ -148,6 +148,77 @@ test('vaciarCola: cancela todos los pendientes y devuelve el conteo', async () =
   assert.ok(env.DB.queue.every(r => r.ml_item_id === 'MLC3' ? r.estado === 'publicado' : r.estado === 'cancelado'))
 })
 
+// ── Anti-duplicados (post-mortem 2026-07-15: feeds repetidos en IG) ──
+
+test('historia falla → feed NO se repite: fila queda publicada con aviso', async () => {
+  const env = mkEnv()
+  await enqueueIg(env, item)
+  const avisos = []
+  let feeds = 0
+  const deps = { ...okDeps(), publishImage: async (e, { story }) => {
+    if (story) throw new Error('story boom')
+    return `FEED${++feeds}`
+  } }
+  const r = await runIgPublisher(env, { force: true, deps, notify: async t => avisos.push(t) })
+  assert.equal(r.publicados, 1)
+  const row = env.DB.queue[0]
+  assert.equal(row.estado, 'publicado')       // no vuelve a pendiente (antes: reintentaba y duplicaba el feed)
+  assert.equal(row.ig_media_id, 'FEED1')
+  assert.equal(feeds, 1)
+  assert.match(avisos.join(' '), /historia falló/)
+})
+
+test('reintento de fila con feed ya subido no vuelve a publicar el feed', async () => {
+  const env = mkEnv()
+  const row = env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1000, ig_media_id: 'FEED_VIEJO', intentos: 1 })
+  const llamadas = []
+  const deps = { ...okDeps(), publishImage: async (e, { story }) => { llamadas.push(story ? 'story' : 'feed'); return 'ST_NUEVO' } }
+  const r = await runIgPublisher(env, { force: true, deps })
+  assert.equal(r.publicados, 1)
+  assert.deepEqual(llamadas, ['story'])       // solo la historia; el feed idempotente se salta
+  assert.equal(row.ig_media_id, 'FEED_VIEJO')
+  assert.equal(row.estado, 'publicado')
+})
+
+test('claim atómico: una fila en publicando no la toma otra corrida', async () => {
+  const env = mkEnv()
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1, estado: 'publicando', claimed_en: new Date().toISOString() })
+  const r = await runIgPublisher(env, { force: true, deps: { ...okDeps(),
+    publishImage: async () => { throw new Error('no debía publicar') } } })
+  assert.equal(r.publicados, 0)
+})
+
+test('recovery: fila colgada en publicando >15 min vuelve a pendiente y sale', async () => {
+  const env = mkEnv()
+  const vieja = new Date(Date.now() - 20 * 60 * 1000).toISOString()
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1, estado: 'publicando', claimed_en: vieja, ig_media_id: 'FEED_YA' })
+  const llamadas = []
+  const deps = { ...okDeps(), publishImage: async (e, { story }) => { llamadas.push(story ? 'story' : 'feed'); return 'X' } }
+  const r = await runIgPublisher(env, { force: true, deps })
+  assert.equal(r.publicados, 1)
+  assert.deepEqual(llamadas, ['story'])       // recuperada, y el feed ya subido no se repite
+})
+
+test('lock: con otra corrida en curso responde enCurso y no publica', async () => {
+  const env = mkEnv()
+  await enqueueIg(env, item)
+  await env.DB.seedConfig('corriendo', JSON.stringify({ hasta: new Date(Date.now() + 60000).toISOString() }))
+  const r = await runIgPublisher(env, { force: true, deps: { ...okDeps(),
+    publishImage: async () => { throw new Error('no debía publicar') } } })
+  assert.deepEqual(r, { publicados: 0, enCurso: true })
+  // lock vencido → publica normal
+  await env.DB.seedConfig('corriendo', JSON.stringify({ hasta: new Date(Date.now() - 1000).toISOString() }))
+  assert.equal((await runIgPublisher(env, { force: true, deps: okDeps() })).publicados, 1)
+})
+
+test('/ig ahora respeta el máximo pedido', async () => {
+  const env = mkEnv()
+  for (const n of [1, 2, 3, 4, 5]) await enqueueIg(env, { ...item, mlItemId: 'MLC' + n })
+  const r = await runIgPublisher(env, { force: true, deps: okDeps(), max: 5 })
+  assert.equal(r.publicados, 5)
+  assert.equal((await listPendientes(env)).length, 0)
+})
+
 test('enqueueStock: re-encola ítems cancelados (UPSERT), no los publicados', async () => {
   const env = { DB: new FakeDB(), SELLER_ID: 'S1' }
   env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'VIEJO', precio: 999, permalink_ml: 'https://x/viejo', estado: 'cancelado', intentos: 2, ultimo_error: 'x' })

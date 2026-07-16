@@ -2,6 +2,10 @@
  * [IG] Cola de publicaciones a Instagram y orquestación de los crons.
  * runIgPublisher: corre cada 30 min; solo actúa dentro de una ventana óptima,
  * una vez por ventana y con tope de 3 productos.
+ * Robustez anti-duplicados (post-mortem 2026-07-15): claim atómico por fila
+ * (estado 'publicando'), feed idempotente (ig_media_id se guarda apenas sale),
+ * historia best-effort (su fallo no repite el feed), lock entre corridas y
+ * recuperación de filas colgadas si el Worker muere a mitad de una corrida.
  * runIgDaily: recalcula ventanas desde insights y renueva el token de Meta.
  * enqueueStock: carga inicial con el inventario activo ya publicado en ML.
  */
@@ -76,7 +80,75 @@ async function getItemDefault(env, mlItemId) {
   return r.json()
 }
 
-export async function runIgPublisher(env, { force = false, now = new Date(), notify = async () => {}, deps = {} } = {}) {
+// Lock consultivo entre corridas (cron + /ig ahora): evita que dos corridas
+// trabajen a la vez. No es atómico, pero el claim por fila de abajo sí lo es,
+// así que aun en el peor caso no puede haber publicaciones duplicadas.
+const LOCK_TTL_MS = 10 * 60 * 1000
+async function acquireLock(env) {
+  const lock = await getConfig(env.DB, 'corriendo')
+  if (lock?.hasta && Date.parse(lock.hasta) > Date.now()) return false
+  await setConfig(env.DB, 'corriendo', { hasta: new Date(Date.now() + LOCK_TTL_MS).toISOString() })
+  return true
+}
+const releaseLock = env => env.DB.prepare("DELETE FROM ig_config WHERE clave='corriendo'").run()
+
+// Toma atómicamente la próxima fila pendiente (estado='publicando' + intento
+// contado). Con esto, dos corridas en paralelo NUNCA publican el mismo ítem.
+async function claimNext(env) {
+  return env.DB.prepare(
+    `UPDATE ig_queue SET estado='publicando', intentos=intentos+1, claimed_en=datetime('now')
+     WHERE id=(SELECT id FROM ig_queue WHERE estado='pendiente' ORDER BY id LIMIT 1)
+     RETURNING *`).first()
+}
+
+// Filas que quedaron en 'publicando' porque el Worker murió a mitad de una
+// corrida vuelven a 'pendiente' (el feed ya subido NO se repite: queda en
+// ig_media_id y publicarFila lo salta).
+async function recoverStuck(env) {
+  await env.DB.prepare(
+    `UPDATE ig_queue SET estado='pendiente'
+     WHERE estado='publicando' AND claimed_en < datetime('now', '-15 minutes')`).run()
+}
+
+// Publica UNA fila ya reclamada: feed idempotente (si un intento anterior ya
+// lo subió, no se repite) + historia best-effort (su fallo no repite el feed).
+async function publicarFila(env, row, { publishImage, getItem, notify }) {
+  const item = await getItem(env, row.ml_item_id)
+  if (item.status !== 'active') {
+    await env.DB.prepare("UPDATE ig_queue SET estado='cancelado' WHERE id=?").bind(row.id).run()
+    log(`${row.ml_item_id} ya no está activo (${item.status}) → cancelado`)
+    return false
+  }
+  const foto = item.pictures?.[0]?.secure_url
+  if (!foto) throw new Error('el ítem no tiene fotos en ML')
+
+  let feedId = row.ig_media_id
+  if (!feedId) {
+    feedId = await publishImage(env, { imageUrl: foto, caption: buildCaption({ titulo: row.titulo, precio: row.precio }) })
+    await env.DB.prepare('UPDATE ig_queue SET ig_media_id=? WHERE id=?').bind(feedId, row.id).run()
+  }
+
+  let storyId = row.ig_story_id, storyErr = null
+  if (!storyId) {
+    try {
+      storyId = await publishImage(env, { imageUrl: foto, story: true })
+      await env.DB.prepare('UPDATE ig_queue SET ig_story_id=? WHERE id=?').bind(storyId, row.id).run()
+    } catch (e) {
+      storyErr = e.message
+      logErr(row.ml_item_id, 'historia:', e.message)
+    }
+  }
+
+  await env.DB.prepare(
+    "UPDATE ig_queue SET estado='publicado', publicado_en=datetime('now'), ultimo_error=? WHERE id=?")
+    .bind(storyErr && `historia: ${storyErr.slice(0, 290)}`, row.id).run()
+  await notify(storyErr
+    ? `📸 Subido a IG: ${row.titulo} (solo feed; la historia falló: ${storyErr})`
+    : `📸 Subido a IG: ${row.titulo} (feed + historia)`)
+  return true
+}
+
+export async function runIgPublisher(env, { force = false, now = new Date(), notify = async () => {}, deps = {}, max = MAX_POR_VENTANA } = {}) {
   if (await isPausado(env)) return { publicados: 0, pausado: true }
   const publishImage = deps.publishImage || igPublishImage
   const getItem      = deps.getItem      || getItemDefault
@@ -90,37 +162,28 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
     await setConfig(env.DB, 'ultima_corrida', { key })
   }
 
-  const { results } = await env.DB.prepare(
-    "SELECT * FROM ig_queue WHERE estado='pendiente' ORDER BY id LIMIT " + MAX_POR_VENTANA).all()
+  if (!(await acquireLock(env))) return { publicados: 0, enCurso: true }
   let publicados = 0
-
-  for (const row of results || []) {
-    if (await isPausado(env)) return { publicados, pausado: true }
-    try {
-      const item = await getItem(env, row.ml_item_id)
-      if (item.status !== 'active') {
-        await env.DB.prepare("UPDATE ig_queue SET estado='cancelado' WHERE id=?").bind(row.id).run()
-        log(`${row.ml_item_id} ya no está activo (${item.status}) → cancelado`)
-        continue
+  try {
+    await recoverStuck(env)
+    for (let i = 0; i < max; i++) {
+      if (await isPausado(env)) return { publicados, pausado: true }
+      const row = await claimNext(env)
+      if (!row) break
+      try {
+        if (await publicarFila(env, row, { publishImage, getItem, notify })) publicados++
+      } catch (e) {
+        // Fallo del feed (o de ML): la fila vuelve a pendiente, o a error al 3er intento.
+        // row.intentos ya viene incrementado por el claim.
+        logErr(row.ml_item_id, e.message)
+        await env.DB.prepare(
+          "UPDATE ig_queue SET ultimo_error=?, estado=CASE WHEN intentos>=" + MAX_INTENTOS +
+          " THEN 'error' ELSE 'pendiente' END WHERE id=?").bind(e.message.slice(0, 300), row.id).run()
+        if (row.intentos >= MAX_INTENTOS) await notify(`❌ IG: "${row.titulo}" falló ${MAX_INTENTOS} veces y quedó en error: ${e.message}`)
       }
-      const foto = item.pictures?.[0]?.secure_url
-      if (!foto) throw new Error('el ítem no tiene fotos en ML')
-      const caption = buildCaption({ titulo: row.titulo, precio: row.precio })
-      const feedId  = await publishImage(env, { imageUrl: foto, caption })
-      const storyId = await publishImage(env, { imageUrl: foto, story: true })
-      await env.DB.prepare(
-        "UPDATE ig_queue SET estado='publicado', ig_media_id=?, ig_story_id=?, publicado_en=datetime('now') WHERE id=?")
-        .bind(feedId, storyId, row.id).run()
-      publicados++
-      await notify(`📸 Subido a IG: ${row.titulo} (feed + historia)`)
-    } catch (e) {
-      logErr(row.ml_item_id, e.message)
-      await env.DB.prepare(
-        "UPDATE ig_queue SET intentos=intentos+1, ultimo_error=?, estado=CASE WHEN intentos+1>=" + MAX_INTENTOS +
-        " THEN 'error' ELSE 'pendiente' END WHERE id=?").bind(e.message.slice(0, 300), row.id).run()
-      const intentos = row.intentos + 1
-      if (intentos >= MAX_INTENTOS) await notify(`❌ IG: "${row.titulo}" falló ${MAX_INTENTOS} veces y quedó en error: ${e.message}`)
     }
+  } finally {
+    await releaseLock(env)
   }
   return { publicados }
 }

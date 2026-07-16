@@ -415,11 +415,13 @@ async function handleIgCommand(env, chatId, args, ctx) {
     return tgSend(env, chatId, ok ? `🗑 Quitado de la cola (id ${esc(rest[0] || '')}).` : `No encontré el id ${esc(rest[0] || '¿?')} pendiente. Mirá /ig cola.`)
   }
   if (sub === 'ahora') {
-    await tgSend(env, chatId, '⏳ Publicando la cola de Instagram ya… (te aviso por acá a medida que salgan)')
+    const max = Math.min(Math.max(parseInt(rest[0], 10) || 3, 1), 10)
+    await tgSend(env, chatId, `⏳ Publicando la cola de Instagram ya (hasta ${max})… te aviso por acá a medida que salgan.`)
     const job = (async () => {
       try {
-        const r = await runIgPublisher(env, { force: true, notify })
-        if (r.pausado) return tgSend(env, chatId, '⏸ La cola está pausada; no publiqué nada. Reanudar: /ig seguir')
+        const r = await runIgPublisher(env, { force: true, notify, max })
+        if (r.enCurso) return tgSend(env, chatId, '⏳ Ya hay una publicación en curso; no lancé otra (espera los avisos o reintenta en unos minutos).')
+        if (r.pausado) return tgSend(env, chatId, `⏸ La cola está pausada${r.publicados ? ` (alcancé a publicar ${r.publicados})` : '; no publiqué nada'}. Reanudar: /ig seguir`)
         return tgSend(env, chatId, r.publicados ? `✅ Listo: ${r.publicados} producto(s) publicados en IG.` : 'No había nada publicable en la cola.')
       } catch (e) { return tgSend(env, chatId, `❌ IG falló: ${esc(e.message)}`) }
     })()
@@ -469,7 +471,7 @@ async function handleIgCommand(env, chatId, args, ctx) {
       ]] },
     })
   }
-  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig ahora · /ig parar · /ig seguir · /ig horas · /ig promo')
+  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig ahora [n] · /ig parar · /ig seguir · /ig horas · /ig promo')
 }
 
 async function sendOrdersList(env, chatId) {

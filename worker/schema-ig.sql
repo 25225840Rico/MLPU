@@ -5,14 +5,17 @@ CREATE TABLE IF NOT EXISTS ig_queue (
   titulo       TEXT NOT NULL,
   precio       INTEGER NOT NULL,
   permalink_ml TEXT,
-  estado       TEXT NOT NULL DEFAULT 'pendiente', -- pendiente|publicado|error|cancelado
+  estado       TEXT NOT NULL DEFAULT 'pendiente', -- pendiente|publicando|publicado|error|cancelado
   intentos     INTEGER NOT NULL DEFAULT 0,
   ultimo_error TEXT,
-  ig_media_id  TEXT,
+  ig_media_id  TEXT, -- se guarda APENAS sale el feed (idempotencia: un reintento no lo repite)
   ig_story_id  TEXT,
   creado_en    TEXT NOT NULL DEFAULT (datetime('now')),
-  publicado_en TEXT
+  publicado_en TEXT,
+  claimed_en   TEXT -- cuándo una corrida reclamó la fila ('publicando'); >15 min → se recupera
 );
+-- Migración sobre bases existentes (ya aplicada en remote 2026-07-16):
+--   ALTER TABLE ig_queue ADD COLUMN claimed_en TEXT;
 
 -- Config clave/valor (JSON en valor): ventanas, ventanas_manual, meta_token, ultima_corrida
 CREATE TABLE IF NOT EXISTS ig_config (

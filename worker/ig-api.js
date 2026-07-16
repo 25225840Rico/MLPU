@@ -33,15 +33,17 @@ async function graphPost(path, params) {
 }
 
 const sleep = ms => new Promise(res => setTimeout(res, ms))
-let RETRY_BASE_MS = 1500
+let RETRY_BASE_MS = 3000
 export const _setRetryBaseMs = ms => { RETRY_BASE_MS = ms } // solo para tests
 
 // Espera a que Meta termine de procesar el contenedor consultando su
 // status_code (publica APENAS está listo, en vez de reintentos ciegos).
-let POLL_MS = 600
+// Hasta ~60 s: las imágenes compuestas (blur 1080x1920) tardan más que los
+// 15 s del poll original, que terminaba en "Media ID is not available".
+let POLL_MS = 2000
 export const _setPollMs = ms => { POLL_MS = ms } // solo para tests
 async function waitForContainer(contId, token) {
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < 30; i++) {
     const r = await fetch(`${GRAPH}/${contId}?fields=status_code&access_token=${encodeURIComponent(token)}`)
     const data = await r.json().catch(() => ({}))
     if (data.status_code === 'IN_PROGRESS') { await sleep(POLL_MS); continue }
