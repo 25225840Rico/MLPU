@@ -1,12 +1,12 @@
 {
-  "phase": "MLPU-INSTAGRAM: Task 7 setup Meta COMPLETO (secrets, IG_USER_ID @topwheels.cl, token largo en D1, redeploy); falta SOLO la prueba real por Telegram. Tienda web = sub-proyecto siguiente (decisiones tomadas). Optimizer CONGELADO.",
-  "status": "Sesión 13 (2026-07-15): secrets META_APP_ID/SECRET subidos; /me/accounts vacío → page e IG obtenidos vía debug_token granular_scopes (page 660949953775866, IG 17841476463162844 = @topwheels.cl, 287 followers); token largo canjeado y sembrado en ig_config.meta_token; IG_USER_ID real en wrangler.toml + deploy 65bcbb83; commit 0957051.",
-  "last_session": "2026-07-15T12:00:00-04:00",
-  "last_worker_version": "65bcbb83-e662-4259-8a2e-eb94b4235bf7",
-  "last_commit": "0957051 (feature/mlpu-instagram, sin push) — IG_USER_ID real en wrangler.toml",
-  "next_step": "Prueba real (usuario en Telegram): /ig stock → /ig cola → /ig ahora → verificar feed+historia en @topwheels.cl. Si IG rechaza proporción → padding WASM (spec). Al pasar: finishing-a-development-branch (merge a main + push), SAVE.txt, y recordar rotar App Secret en panel Meta.",
+  "phase": "MLPU-INSTAGRAM COMPLETO Y EN PRODUCCIÓN (mergeado a main). Falta solo prueba real por Telegram + rotar App Secret. Siguiente sub-proyecto: TIENDA WEB. Optimizer CONGELADO.",
+  "status": "Sesión 13 (2026-07-15): Task 7 setup Meta completo (token largo en D1, IG_USER_ID @topwheels.cl) + fase pausa/padding/promo implementada con subagent-driven (7 tasks + fix final f820796): /ig parar|seguir|vaciar, padding wsrv q=95 + variante -F.jpg con fallback filtrado, caption 🟢 DISPONIBLE, /ig promo con botones. Merge a main 478c1f5 pusheado.",
+  "last_session": "2026-07-15T14:30:00-04:00",
+  "last_worker_version": "483712dc-b29d-451f-a307-984c1553e250",
+  "last_commit": "478c1f5 (main, pusheado) — merge feature/mlpu-instagram",
+  "next_step": "Prueba real Telegram: /ig promo (botones) · /ig stock → /ig cola → /ig ahora (feed sin recorte + caption nuevo + historia) · /ig parar|seguir. Luego rotar App Secret en panel Meta y wrangler secret put META_APP_SECRET.",
   "open_tasks": [
-    "Prueba real MLPU-Instagram: /ig stock, /ig cola, /ig ahora + verificar en @topwheels.cl",
+    "Prueba real MLPU-Instagram: /ig promo, /ig stock→cola→ahora, parar/seguir + verificar en @topwheels.cl",
     "Rotar App Secret en panel Meta (quedó pegado en el chat) y re-subir con wrangler secret put",
     "Sub-proyecto MLPU-Tienda: brainstorm fino + spec (Worker+D1, MP Checkout Pro + Webpay Plus, sync bidireccional, dominio del usuario → nameservers Cloudflare)",
     "Si IG rechaza imágenes por proporción: contingencia padding WASM (spec)",
@@ -21,7 +21,7 @@
     "Opcional: actualizar Node 20→24 en .github/workflows/deploy.yml"
   ],
   "blockers": [
-    "Prueba real requiere al usuario en Telegram (comandos /ig). Setup Meta ya completo.",
+    "Prueba real y rotación del App Secret requieren al usuario.",
     "PR #1 (cotizador-costos) bloqueado esperando URL+anon-key de Supabase vivo.",
     "Envío gratis OBLIGATORIO a precio ≥ $19.990 EXACTO en MLC — sin salida salvo precio < $19.990 (2026-07-10): aplica a todos los listing_types y ML revierte en silencio; a $19.989 se libera (verificado). Los 2 ítems que estaban justo en $19.990 se bajaron a $19.989 (Premium + envío por comprador); quedan 49 con precio > $19.990 en Premium + envío gratis (costo vendedor ~$6.300/venta)."
   ],

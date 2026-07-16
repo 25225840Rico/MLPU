@@ -1,3 +1,21 @@
+SAVE — MLPU (2026-07-15, sesión 13 — cierre)
+MLPU-INSTAGRAM COMPLETO Y EN PRODUCCIÓN (mergeado a main 478c1f5, pusheado).
+Worker 483712dc · 35/35 tests · cuenta IG @topwheels.cl (17841476463162844).
+Esta sesión: (a) Task 7 setup Meta: secrets META_APP_ID/SECRET, token largo
+sembrado en D1 ig_config.meta_token (renovación automática >45 días),
+IG_USER_ID real + deploy. (b) Fase pausa/padding/promo (spec+plan 2026-07-15,
+7 tasks subagent-driven + review final): /ig parar·seguir·vaciar, imágenes SIN
+recorte (padding blanco wsrv.nl q=95) y máxima calidad (variante -F.jpg de ML,
+fallback a URL original solo ante error de imagen), caption 🟢 DISPONIBLE,
+/ig promo (vista previa + botón sube historia promocional TOPWHEELS.CL,
+PNG en /ig/promo.png vía static assets; regenerar: scripts/gen-promo-story.py).
+PRÓXIMO PASO AL RETOMAR: prueba real por Telegram (t.me/Pulicadorlibre_bot):
+/ig promo (botones) · /ig stock → /ig cola → /ig ahora → verificar feed
+(sin recorte, caption nuevo) + historia en @topwheels.cl · /ig parar/seguir.
+PENDIENTE SEGURIDAD: rotar App Secret en panel Meta (quedó en el chat) y
+re-subir con: wrangler secret put META_APP_SECRET.
+Detalle: progress/CHECKPOINT.md · progress/log/2026-07-15.md
+
 SAVE — MLPU (2026-07-10, sesión 11 — cierre)
 NUEVO FRENTE: MLPU-OPTIMIZER (agente autónomo de optimización).
 Diseño COMPLETO y aprobado (spec v1.0) + plan de implementación F0+F1
