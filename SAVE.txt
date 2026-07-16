@@ -1,14 +1,15 @@
-SAVE — MLPU (2026-07-16, sesión 14 — parte 2)
-GOTEO AUTOMÁTICO IG EN PRODUCCIÓN (commit af09e1d pusheado, deploy 60bd0749,
-51/51 tests, cron */15). modo_auto ACTIVO: 1 producto cada ~90 min, 09:00–23:00
-Chile, hasta vaciar los 133 pendientes; avisa por Telegram en cada uno y al
-vaciarse. Comandos: /ig auto [min|off], /ig ahora [n] sigue para manual.
-POR QUÉ: /ig ahora 5 moría (~50 s) — Cloudflare corta el background del webhook;
-lock quedaba pegado ("ya hay una en curso"). Tandas largas = frágiles; goteo
-1/tick por cron = robusto. Intervalo 90 por límite Meta ~25 posts API/24h.
-PRÓXIMO PASO AL RETOMAR: confirmar que el goteo corre solo (avisos "📸 Subido
-a IG" cada ~90 min; en D1: SELECT MAX(publicado_en) FROM ig_queue) y que no
-haya filas en 'publicando' viejas ni 'error'.
+SAVE — MLPU (2026-07-16, sesión 14 — parte 3)
+MODO RUSH IG EN PRODUCCIÓN (commit 1423030 pusheado, deploy d4c96a82, 56/56
+tests). RUSH ACTIVO: 3 productos por tick del cron (*/15, 09:00–23:00 Chile)
+hasta llenar el cupo REAL de Meta — content_publishing_limit dice 100/24 h (no
+25) y las historias cuentan → ~48 ítems/día; reserva 4 para /ig promo. Cupo
+lleno → UNA alerta con hora de reapertura (post más viejo +24 h) y retoma solo.
+Comandos: /ig rush [off] · /ig auto [min|off] (goteo) · /ig ahora [n] manual.
+Base de la robustez (partes 1-2): claim atómico por fila, feed idempotente,
+historia best-effort, lock TTL 5 min, recovery de 'publicando' >15 min.
+PRÓXIMO PASO AL RETOMAR: confirmar que el rush corre solo (avisos "📸 Subido a
+IG" de a 3 cada 15 min; D1: SELECT estado,COUNT(*) FROM ig_queue GROUP BY
+estado) y que la alerta de cupo llegue al llenarse (~hoy en la tarde).
 PENDIENTE: rotar App Secret Meta + wrangler secret put META_APP_SECRET (s13);
 decidir re-publicar Tundra (id 4, usuario borró su post del feed).
 Detalle: progress/CHECKPOINT.md · progress/log/2026-07-16.md

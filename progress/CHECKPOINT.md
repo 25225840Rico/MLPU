@@ -1,12 +1,13 @@
 # CHECKPOINT — MLPU
 
-**Última sesión:** 2026-07-16 (sesión 14) | **Rama:** main (af09e1d, pusheado) |
-**Worker Version:** 60bd0749 | **Webhook:** ACTIVO | **Crons:** */15 (IG publisher) + 0 10 UTC (IG daily) | **Tests:** 51/51
+**Última sesión:** 2026-07-16 (sesión 14) | **Rama:** main (1423030, pusheado) |
+**Worker Version:** d4c96a82 | **Webhook:** ACTIVO | **Crons:** */15 (IG publisher) + 0 10 UTC (IG daily) | **Tests:** 56/56
 
-## Fase actual: MLPU-INSTAGRAM — GOTEO AUTOMÁTICO EN PRODUCCIÓN
-Fix anti-duplicados + modo `/ig auto` desplegados. **modo_auto ACTIVO: 90 min**
-(1 producto cada ~90 min, 09:00–23:00 Chile, hasta vaciar los 133 pendientes).
-Falta confirmar el primer goteo real (~12:45 Chile del 16/07).
+## Fase actual: MLPU-INSTAGRAM — MODO RUSH EN PRODUCCIÓN
+Anti-duplicados + `/ig auto` (goteo) + `/ig rush` desplegados. **RUSH ACTIVO**:
+3 productos por tick de 15 min (09:00–23:00 Chile) hasta llenar el cupo REAL de
+Meta (100/24 h, historias cuentan → ~48 ítems/día); al llenarse avisa la hora
+de reapertura y retoma solo. 133 pendientes → cola vacía en ~3 días.
 
 ## Qué se completó esta sesión (2026-07-16)
 1. **Diagnóstico con evidencia** (D1 + Graph API): 3 causas raíz —
@@ -31,8 +32,8 @@ anti-duplicados funcionó — y murió reclamando id 3). Solución: **goteo por 
 lock TTL 5 min, aviso al vaciar la cola. Commit af09e1d, deploy 60bd0749.
 
 ## PRÓXIMO paso accionable
-1. Verificar el primer goteo real (tarea background butw1u5gw consulta D1 tras
-   ~16:45 UTC; también deben llegar avisos "📸 Subido a IG" por Telegram).
+1. Verificar el primer tick del rush (15:45 UTC / 11:45 Chile: 3 productos;
+   background b6iejghib consulta D1) y que lleguen avisos "📸 Subido a IG".
 2. **SEGURIDAD (heredado s13)**: rotar App Secret en panel Meta →
    `wrangler secret put META_APP_SECRET`.
 3. Decidir si re-publicar la Tundra (id 4): DB dice publicado pero el usuario
