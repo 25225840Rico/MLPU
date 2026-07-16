@@ -32,8 +32,9 @@ anti-duplicados funcionó — y murió reclamando id 3). Solución: **goteo por 
 lock TTL 5 min, aviso al vaciar la cola. Commit af09e1d, deploy 60bd0749.
 
 ## PRÓXIMO paso accionable
-1. Verificar el primer tick del rush (15:45 UTC / 11:45 Chile: 3 productos;
-   background b6iejghib consulta D1) y que lleguen avisos "📸 Subido a IG".
+1. ✔ RUSH VERIFICADO (tick 15:30 UTC: ids 3, 13, 14 con feed+historia, 0 errores,
+   0 duplicados). Solo seguimiento: alerta de cupo lleno hoy en la tarde y
+   chequeo de salud de ig_queue al retomar (query en HANDOFF.txt).
 2. **SEGURIDAD (heredado s13)**: rotar App Secret en panel Meta →
    `wrangler secret put META_APP_SECRET`.
 3. Decidir si re-publicar la Tundra (id 4): DB dice publicado pero el usuario

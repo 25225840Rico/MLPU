@@ -4,9 +4,9 @@
   "last_session": "2026-07-16T11:45:00-04:00",
   "last_worker_version": "d4c96a82-7b8d-4d39-a5bd-d5bba8db91c6",
   "last_commit": "4dc6238 (main, pusheado) — progress cierre parte 3; código en 1423030",
-  "next_step": "Verificar que el rush corre solo: avisos '📸 Subido a IG' de a 3 cada 15 min en Telegram; en D1: SELECT estado,COUNT(*) FROM ig_queue GROUP BY estado (pendientes bajando, sin 'publicando' viejas ni 'error'); alerta de cupo al llenarse (~100/100 hoy en la tarde).",
+  "next_step": "RUSH VERIFICADO (tick 15:30 UTC 16/07: ids 3,13,14 feed+historia, 0 errores/duplicados). Seguimiento pasivo: alerta de cupo lleno (~100/100 hoy tarde, una sola vez) y chequeo de salud de ig_queue al retomar (query en HANDOFF.txt).",
   "open_tasks": [
-    "Confirmar rush en producción (primer tick 2026-07-16 15:45 UTC) y alerta de cupo lleno",
+    "Confirmar que la alerta de cupo lleno llegue una sola vez y que el rush retome solo al día siguiente",
     "Decidir si re-publicar Tundra id 4 (usuario borró su post del feed; DB dice publicado)",
     "Rotar App Secret en panel Meta (quedó pegado en el chat) y re-subir con wrangler secret put",
     "Sub-proyecto MLPU-Tienda: brainstorm fino + spec (Worker+D1, MP Checkout Pro + Webpay Plus, sync bidireccional, dominio del usuario → nameservers Cloudflare)",

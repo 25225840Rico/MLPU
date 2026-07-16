@@ -21,18 +21,19 @@ ESTADO ACTUAL (todo desplegado y pusheado):
   reapertura (post mas viejo de la ventana +24h) y retoma solo.
 - Cola al momento del corte: ~130 pendientes, 14+ publicados, 0 error.
 
-ULTIMO PASO COMPLETADO: deploy d4c96a82 + activacion del rush (15:35 UTC) +
-commits/push (codigo 1423030, progress 4dc6238). Quedaron 2 verificaciones
-background de esta sesion que se pierden con el /clear (no importa).
+ULTIMO PASO COMPLETADO: RUSH VERIFICADO EN PRODUCCION (16/07 15:36 UTC): el
+tick de las 15:30 publico 3 productos (ids 3, 13, 14) con feed+historia
+completos, cero errores, cero duplicados, sin filas colgadas ni lock pegado.
+El id 3 (Matchbox Bronco, el que ayer fallo 3 veces) salio perfecto con el
+poll paciente. Cola: 130 pendientes / 14 publicados / 0 error. Cupo ~30/100.
 
-PROXIMO PASO EXACTO: verificar que el rush corre solo. Comprobar:
-1) En Telegram deben estar llegando avisos "Subido a IG" de a 3 cada 15 min
-   (primer tick esperado: 15:45 UTC del 16/07). Preguntar al usuario o revisar.
-2) En D1:  cd worker && npx wrangler d1 execute mlpu-db --remote --command
-   "SELECT estado, COUNT(*) FROM ig_queue GROUP BY estado"  -> pendientes
-   bajando, sin filas 'publicando' con claimed_en viejo, sin 'error'.
-3) Cuando el cupo llegue a ~100/100 (hoy en la tarde), debe llegar la alerta
-   "Cupo diario de Meta lleno" UNA sola vez, y manana el rush retoma solo.
+PROXIMO PASO EXACTO: seguimiento pasivo del rush (ya verificado):
+1) Hoy en la tarde, al llegar el cupo a ~100/100, debe llegar UNA alerta
+   "Cupo diario de Meta lleno (~HH:MM de reapertura)"; manana retoma solo.
+2) Chequeo rapido de salud cuando se retome la sesion:
+   cd worker && npx wrangler d1 execute mlpu-db --remote --command
+   "SELECT estado, COUNT(*) FROM ig_queue GROUP BY estado"
+   -> pendientes bajando, sin 'publicando' con claimed_en viejo, sin 'error'.
 Si algo fallo: revisar ultimo_error en ig_queue y logs con wrangler tail.
 
 PENDIENTES DEL USUARIO:
