@@ -11,8 +11,8 @@
  * runIgDaily: recalcula ventanas desde insights y renueva el token de Meta.
  * enqueueStock: carga inicial con el inventario activo ya publicado en ML.
  */
-import { buildCaption, windowKey, pickBestWindows, enHorarioAuto, FALLBACK_WINDOWS } from './ig-logic.js'
-import { igPublishImage, fetchOnlineFollowers, maybeRefreshMetaToken } from './ig-api.js'
+import { buildCaption, windowKey, pickBestWindows, enHorarioAuto, horaChile, FALLBACK_WINDOWS } from './ig-logic.js'
+import { igPublishImage, fetchOnlineFollowers, fetchPublishingQuota, maybeRefreshMetaToken } from './ig-api.js'
 import { mlFetch } from './ml-fetch.js'
 
 const MAX_POR_VENTANA = 3
@@ -63,15 +63,44 @@ export async function isPausado(env) {
   return !!(await getConfig(env.DB, 'pausado'))
 }
 
-// Modo automático (goteo): el cron publica 1 producto cada intervalo_min
-// minutos (mínimo 15 = frecuencia del cron), solo entre 09:00 y 23:00 Chile,
-// hasta vaciar la cola. null = modo ventanas (comportamiento clásico).
+// Modo automático. Dos variantes (null = modo ventanas clásico):
+//  - goteo: {intervalo_min}: 1 producto cada N minutos;
+//  - rush:  {rush:true}: 3 productos por tick del cron hasta llenar el cupo
+//    diario de Meta (consultado en vivo), avisando cuándo se reabre.
+// Ambas solo entre 09:00 y 23:00 Chile, hasta vaciar la cola.
 export async function getAuto(env) {
   return getConfig(env.DB, 'modo_auto')
 }
 export async function setAuto(env, intervaloMin) {
   if (!intervaloMin) return env.DB.prepare("DELETE FROM ig_config WHERE clave='modo_auto'").run()
   return setConfig(env.DB, 'modo_auto', { intervalo_min: intervaloMin, desde: new Date().toISOString() })
+}
+export async function setRush(env) {
+  return setConfig(env.DB, 'modo_auto', { rush: true, desde: new Date().toISOString() })
+}
+
+// Cuántos del cupo de Meta se reservan para acciones manuales (/ig promo).
+export const RUSH_RESERVA = 4
+const RUSH_POR_TICK = 3
+
+// 'YYYY-MM-DD HH:MM:SS' (D1, UTC) o ISO → epoch ms.
+function parseDbUtc(s) {
+  const t = String(s).replace(' ', 'T')
+  return Date.parse(t.endsWith('Z') ? t : t + 'Z')
+}
+
+// Cupo lleno: estima cuándo se libera (el post más viejo dentro de la ventana
+// móvil de 24 h expira a las +24 h) y avisa UNA vez por episodio (el flag
+// rush_avisado se borra al volver a publicar).
+async function avisarCupoLleno(env, now, quota, notify) {
+  if (await getConfig(env.DB, 'rush_avisado')) return
+  const row = await env.DB.prepare(
+    "SELECT MIN(publicado_en) m FROM ig_queue WHERE publicado_en > datetime('now','-24 hours')").first()
+  const reabre = new Date((row?.m ? parseDbUtc(row.m) + 24 * 3600e3 : now.getTime() + 3600e3) + 5 * 60e3)
+  const fueraDeHorario = !enHorarioAuto(reabre)
+  await setConfig(env.DB, 'rush_avisado', { reabre: reabre.toISOString() })
+  await notify(`🚦 Cupo diario de Meta lleno (${quota.usados}/${quota.total} en 24 h). ` +
+    `El rush retoma solo ~${horaChile(reabre)}${fueraDeHorario ? ' (ajustado al horario 09:00–23:00)' : ''} hora de Chile. No tienes que hacer nada.`)
 }
 
 // ¿Le toca publicar al goteo? Compara contra la última publicación real
@@ -81,9 +110,7 @@ async function tocaGotear(env, now, intervaloMin) {
   if (!enHorarioAuto(now)) return false
   const row = await env.DB.prepare('SELECT MAX(publicado_en) m FROM ig_queue').first()
   if (!row?.m) return true
-  const s = String(row.m).replace(' ', 'T')
-  const ultima = Date.parse(s.endsWith('Z') ? s : s + 'Z')
-  return now.getTime() - ultima >= (intervaloMin - 5) * 60000
+  return now.getTime() - parseDbUtc(row.m) >= (intervaloMin - 5) * 60000
 }
 
 export async function setPausado(env, on) {
@@ -182,9 +209,19 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
   let auto = null
   if (!force) {
     auto = await getAuto(env)
-    if (auto?.intervalo_min) {
-      // Modo automático: goteo de 1 por tick del cron. Trabajo corto = corrida
-      // confiable (las tandas largas en un solo invoke morían a mitad de camino).
+    if (auto?.rush) {
+      // Modo rush: exprime el cupo diario de Meta en tandas cortas de 3 por
+      // tick (corridas largas en un solo invoke morían a mitad de camino).
+      if (!enHorarioAuto(now)) return { publicados: 0 }
+      const quota = await (deps.getQuota || fetchPublishingQuota)(env)
+      const cupo = Math.floor((quota.total - quota.usados - RUSH_RESERVA) / 2) // feed+historia = 2
+      if (cupo < 1) {
+        await avisarCupoLleno(env, now, quota, notify)
+        return { publicados: 0, cupoLleno: true }
+      }
+      max = Math.min(RUSH_POR_TICK, cupo)
+    } else if (auto?.intervalo_min) {
+      // Modo goteo: 1 por tick del cron, cada intervalo_min minutos.
       if (!(await tocaGotear(env, now, auto.intervalo_min))) return { publicados: 0 }
       max = 1
     } else {
@@ -220,8 +257,9 @@ export async function runIgPublisher(env, { force = false, now = new Date(), not
     await releaseLock(env)
   }
   if (auto && publicados > 0) {
+    await env.DB.prepare("DELETE FROM ig_config WHERE clave='rush_avisado'").run()
     const resto = await env.DB.prepare("SELECT COUNT(*) n FROM ig_queue WHERE estado='pendiente'").first()
-    if (!resto?.n) await notify('📭 Goteo automático: la cola de Instagram quedó vacía. Recargar: /ig stock')
+    if (!resto?.n) await notify('📭 Modo automático: la cola de Instagram quedó vacía. Recargar: /ig stock')
   }
   return { publicados }
 }

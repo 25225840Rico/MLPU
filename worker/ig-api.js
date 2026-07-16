@@ -105,6 +105,17 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
 const esErrorDeImagen = (e) => /image|photo|media|download|fetch|url/i.test(e.message) &&
   !/rate|limit|token|permission|oauth|not available/i.test(e.message)
 
+// Cupo de publicación por API de Meta (ventana móvil de 24 h). Verificado
+// 2026-07-16 en @topwheels.cl: quota_total=100 y las HISTORIAS también cuentan.
+export async function fetchPublishingQuota(env) {
+  const token = await getMetaToken(env.DB)
+  const r = await fetch(`${GRAPH}/${env.IG_USER_ID}/content_publishing_limit?fields=quota_usage,config&access_token=${encodeURIComponent(token)}`)
+  const data = await r.json()
+  if (!r.ok || data.error) throw new Error(data.error?.message || `quota ${r.status}`)
+  const q = data.data?.[0]
+  return { usados: q?.quota_usage ?? 0, total: q?.config?.quota_total ?? 25 }
+}
+
 // Seguidores conectados por hora (metric online_followers). La API entrega un
 // valor por día; se suman los días devueltos. null si la cuenta aún no da datos.
 export async function fetchOnlineFollowers(env) {

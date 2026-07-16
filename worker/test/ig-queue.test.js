@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto } from '../ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto, setRush } from '../ig-queue.js'
 import { FakeDB } from './fake-db.js'
 
 const mkEnv = () => ({ DB: new FakeDB(), IG_USER_ID: 'IGU', TELEGRAM_CHAT_ID: '1', SELLER_ID: '283388639' })
@@ -271,6 +271,67 @@ test('auto off: vuelve al modo por ventanas', async () => {
   // 14:00 Chile no es ventana (fallback 12:30/20:00) → el cron no publica
   const r = await runIgPublisher(env, { now: enHorario, deps: okDeps() })
   assert.equal(r.publicados, 0)
+})
+
+// ── Modo rush: exprime el cupo diario de Meta, 3 por tick ──
+
+test('rush: publica 3 por tick mientras el cupo alcance', async () => {
+  const env = mkEnv()
+  for (const n of [1, 2, 3, 4, 5]) await enqueueIg(env, { ...item, mlItemId: 'MLC' + n })
+  await setRush(env)
+  const deps = { ...okDeps(), getQuota: async () => ({ usados: 10, total: 100 }) }
+  const r = await runIgPublisher(env, { now: enHorario, deps })
+  assert.equal(r.publicados, 3)
+  assert.equal((await listPendientes(env)).length, 2)
+})
+
+test('rush: con poco cupo publica solo lo que cabe (reserva incluida)', async () => {
+  const env = mkEnv()
+  for (const n of [1, 2, 3]) await enqueueIg(env, { ...item, mlItemId: 'MLC' + n })
+  await setRush(env)
+  // libres: 100-91=9; menos reserva 4 → 5 → 2 productos (feed+historia = 2 c/u)
+  const deps = { ...okDeps(), getQuota: async () => ({ usados: 91, total: 100 }) }
+  assert.equal((await runIgPublisher(env, { now: enHorario, deps })).publicados, 2)
+})
+
+test('rush: cupo lleno → avisa hora de reapertura UNA vez y no publica', async () => {
+  const env = mkEnv()
+  await enqueueIg(env, item)
+  await setRush(env)
+  env.DB.seedQueue({ ml_item_id: 'MLC8', titulo: 'viejo', precio: 1, estado: 'publicado',
+    publicado_en: new Date(enHorario.getTime() - 2 * 3600e3).toISOString() })
+  const avisos = []
+  const deps = { ...okDeps(), getQuota: async () => ({ usados: 97, total: 100 }) }
+  const opts = { now: enHorario, deps, notify: async t => avisos.push(t) }
+  assert.equal((await runIgPublisher(env, opts)).cupoLleno, true)
+  assert.equal((await runIgPublisher(env, opts)).cupoLleno, true) // segundo tick: sin re-aviso
+  assert.equal(avisos.length, 1)
+  assert.match(avisos[0], /Cupo diario de Meta lleno \(97\/100/)
+  assert.match(avisos[0], /\d{2}:\d{2}/) // hora estimada de reapertura
+})
+
+test('rush: al liberarse el cupo publica y rearma el aviso', async () => {
+  const env = mkEnv()
+  for (const n of [1, 2]) await enqueueIg(env, { ...item, mlItemId: 'MLC' + n })
+  await setRush(env)
+  const avisos = []
+  let usados = 99
+  const deps = { ...okDeps(), getQuota: async () => ({ usados, total: 100 }) }
+  const opts = { now: enHorario, deps, notify: async t => avisos.push(t) }
+  await runIgPublisher(env, opts)                    // lleno → aviso 1
+  usados = 10
+  assert.equal((await runIgPublisher(env, opts)).publicados, 2) // se liberó → publica y borra flag
+  usados = 99
+  await runIgPublisher(env, opts)                    // lleno de nuevo → aviso 2
+  assert.equal(avisos.filter(a => /Cupo diario/.test(a)).length, 2)
+})
+
+test('rush: fuera de horario (madrugada Chile) no publica ni consulta cupo', async () => {
+  const env = mkEnv()
+  await enqueueIg(env, item)
+  await setRush(env)
+  const deps = { ...okDeps(), getQuota: async () => { throw new Error('no debía consultar') } }
+  assert.equal((await runIgPublisher(env, { now: deMadrugada, deps })).publicados, 0)
 })
 
 test('enqueueStock: re-encola ítems cancelados (UPSERT), no los publicados', async () => {

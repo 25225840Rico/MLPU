@@ -77,6 +77,11 @@ function makeStmt(db, sql, args) {
       const fechas = db.queue.map(r => r.publicado_en).filter(Boolean).sort()
       return { m: fechas[fechas.length - 1] ?? null }
     }
+    if (sql.includes('MIN(publicado_en)')) {
+      const desde = Date.now() - 24 * 3600e3
+      const fechas = db.queue.map(r => r.publicado_en).filter(f => f && Date.parse(f) > desde).sort()
+      return { m: fechas[0] ?? null }
+    }
     if (sql.includes('COUNT(*)') && sql.includes("estado='pendiente'")) {
       return { n: db.queue.filter(r => r.estado === 'pendiente').length }
     }

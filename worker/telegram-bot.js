@@ -22,7 +22,8 @@ import {
   analyzeProduct, clusterPhotos, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
   getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto } from './ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto, setRush, RUSH_RESERVA } from './ig-queue.js'
+import { fetchPublishingQuota } from './ig-api.js'
 import { fmtCLP } from './ig-logic.js'
 import { igPublishImage } from './ig-api.js'
 
@@ -473,9 +474,26 @@ async function handleIgCommand(env, chatId, args, ctx) {
         'Te aviso por acá cada vez que salga uno. Pausar: /ig parar · Apagar: /ig auto off')
     }
     const a = await getAuto(env)
+    if (a?.rush) return tgSend(env, chatId, '🔥 Modo RUSH activo (manda /ig rush para ver el cupo). Goteo: /ig auto 30 · Apagar: /ig auto off')
     return tgSend(env, chatId, a?.intervalo_min
       ? `🚿 Goteo automático ACTIVO: 1 producto cada ~${a.intervalo_min} min (09:00–23:00 Chile). Apagar: /ig auto off`
-      : '🚿 Goteo automático apagado (rige el modo por ventanas). Activar: /ig auto 30')
+      : '🚿 Goteo automático apagado (rige el modo por ventanas). Activar: /ig auto 30 · Rush: /ig rush')
+  }
+  if (sub === 'rush') {
+    if (rest[0] === 'off') {
+      await setAuto(env, 0)
+      return tgSend(env, chatId, '🔥 Rush APAGADO. Vuelve el modo por ventanas. Goteo suave: /ig auto 90')
+    }
+    await setRush(env)
+    let cupoTxt = ''
+    try {
+      const q = await fetchPublishingQuota(env)
+      const items = Math.max(0, Math.floor((q.total - q.usados - RUSH_RESERVA) / 2))
+      cupoTxt = `\nCupo de Meta ahora: ${q.usados}/${q.total} usados en 24 h → puedo subir ~${items} producto(s) más hoy (feed+historia = 2 c/u).`
+    } catch { /* el estado del cupo es informativo; el rush igual queda activo */ }
+    return tgSend(env, chatId,
+      `🔥 Modo RUSH activado: subo 3 productos cada 15 min (09:00–23:00 Chile) hasta llenar el cupo diario de Meta; ` +
+      `cuando se llene te aviso a qué hora se reabre y sigo solo.${cupoTxt}\nApagar: /ig rush off · Goteo suave: /ig auto 90`)
   }
   if (sub === 'promo') {
     return tgApi(env, 'sendPhoto', {
@@ -489,7 +507,7 @@ async function handleIgCommand(env, chatId, args, ctx) {
       ]] },
     })
   }
-  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig auto [min|off] · /ig ahora [n] · /ig parar · /ig seguir · /ig horas · /ig promo')
+  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig rush [off] · /ig auto [min|off] · /ig ahora [n] · /ig parar · /ig seguir · /ig horas · /ig promo')
 }
 
 async function sendOrdersList(env, chatId) {

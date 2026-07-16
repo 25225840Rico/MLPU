@@ -67,6 +67,12 @@ export function enHorarioAuto(date, tz = 'America/Santiago') {
   return minutos >= AUTO_DESDE_MIN && minutos < AUTO_HASTA_MIN
 }
 
+// 'HH:MM' en hora de Chile, para mensajes al usuario.
+export function horaChile(date, tz = 'America/Santiago') {
+  const { minutos } = localParts(date, tz)
+  return `${String(Math.floor(minutos / 60)).padStart(2, '0')}:${String(minutos % 60).padStart(2, '0')}`
+}
+
 // Clave única de la ventana activa (para correr UNA vez por ventana): 'YYYY-MM-DDTHH:MM'.
 export function windowKey(date, windows, tz = 'America/Santiago') {
   const w = activeWindow(date, windows, tz)
