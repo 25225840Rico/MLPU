@@ -9,13 +9,15 @@ MISMO efecto (fondo c_fill+e_blur:2000, foto c_fit encima, banner
 l_disponible en historias) SIN CPU del worker. OJO: b_blurred es solo video.
 D1: 8 en error + 14 publicadas sin historia → reencoladas (103 pendientes).
 Cola PAUSADA por el usuario; modo auto apagado. NO sale nada hasta /ig seguir.
-PRÓXIMO PASO AL RETOMAR: (1) usuario crea cuenta free en cloudinary.com y
-pasa el CLOUD NAME; (2) poner CLOUDINARY_CLOUD en wrangler.toml + deploy;
-(3) en Cloudinary: Settings→Security permitir fetch (dominio mlstatic.com)
-y subir worker/public/ig/disponible.png como public_id "disponible";
-(4) probar la URL de cloudinaryBlurUrl con una foto real (feed e historia);
-(5) /ig seguir + 🔥 Rush. Sin Cloudinary igual publica (blur a ratos,
-original como salvavidas), pero sin garantía de blur.
+CLOUDINARY ACTIVO (commit 7e40218, deploy 7a853282): cuenta creada por el
+usuario (cloud w5v0d8rl), banner subido como asset 'disponible' (700x150),
+fetch remoto habilitado por defecto. Verificado con foto real de mlstatic:
+feed e historia devuelven 200 image/jpeg con fondo blur + banner (revisada
+visualmente la historia: efecto idéntico al compositor propio).
+PRÓXIMO PASO AL RETOMAR: solo falta que el usuario reactive la cola por
+Telegram: ▶️ Seguir (/ig seguir) + 🔥 Rush YA → drena los 103 pendientes.
+Sugerido: rotar el API Secret de Cloudinary (quedó pegado en el chat);
+el worker NO lo usa (solo el cloud name, público).
 PENDIENTE heredado: rotar App Secret Meta (s13) · Tundra id 4.
 Detalle: progress/log/2026-07-17-fix-cpu-1102.md
 
