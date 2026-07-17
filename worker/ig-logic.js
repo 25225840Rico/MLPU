@@ -92,9 +92,26 @@ export function blurImageUrl(publicUrl, url, story = false) {
 }
 
 // Compositor propio en modo lite (blur barato: upscale directo al lienzo, sin
-// crop). Fallback que CONSERVA el fondo blur y el banner — requisito del
-// negocio: las publicaciones llevan fondo blur SÍ O SÍ (2026-07-17), por eso
-// ya no existen los fallbacks wsrv/URL original (salían sin blur ni banner).
+// crop). Conserva el fondo blur y el banner.
 export function liteImageUrl(publicUrl, url, story = false) {
   return `${blurImageUrl(publicUrl, url, story)}&m=lite`
+}
+
+// Cloudinary (plan free) replica el efecto del compositor propio SIN CPU del
+// Worker: base = la misma foto en c_fill + e_blur (fondo difuminado a lienzo
+// completo), capa 1 = la foto en c_fit centrada, capa 2 (historias) = el
+// banner DISPONIBLE (asset 'disponible' subido a la cuenta). b_blurred no
+// sirve: es solo para video. Eslabón principal desde 2026-07-17: el compositor
+// propio excede el límite de CPU del plan Free de Workers (error 1102) bajo
+// carga. Requiere env.CLOUDINARY_CLOUD (cloud name de la cuenta).
+export function cloudinaryBlurUrl(cloud, url, story = false) {
+  const H = story ? 1920 : 1080
+  const b64 = btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const t = [
+    `w_1080,h_${H},c_fill,e_blur:2000`,
+    `l_fetch:${b64},w_1080,h_${H},c_fit/fl_layer_apply`,
+  ]
+  if (story) t.push('l_disponible/fl_layer_apply,g_south,y_230')
+  t.push('f_jpg,q_90')
+  return `https://res.cloudinary.com/${cloud}/image/fetch/${t.join('/')}/${encodeURIComponent(url)}`
 }

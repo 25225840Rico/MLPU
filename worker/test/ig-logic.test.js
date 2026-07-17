@@ -1,12 +1,29 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fmtCLP, buildCaption, pickBestWindows, isInWindow, windowKey, FALLBACK_WINDOWS, maxResPicture, liteImageUrl } from '../ig-logic.js'
+import { fmtCLP, buildCaption, pickBestWindows, isInWindow, windowKey, FALLBACK_WINDOWS, maxResPicture, liteImageUrl, cloudinaryBlurUrl } from '../ig-logic.js'
 
 test('liteImageUrl: compositor propio en modo lite (con s=1 en historias)', () => {
   assert.equal(
     liteImageUrl('https://pub.test', 'https://http2.mlstatic.com/a-F.jpg', true),
     'https://pub.test/ig/img?u=' + encodeURIComponent('https://http2.mlstatic.com/a-F.jpg') + '&s=1&m=lite')
   assert.ok(!liteImageUrl('https://pub.test', 'https://x/y.jpg', false).includes('s=1'))
+})
+
+test('cloudinaryBlurUrl: feed 1080x1080 — fondo c_fill+e_blur y la misma foto c_fit encima', () => {
+  const src = 'https://http2.mlstatic.com/a-F.jpg'
+  const b64 = Buffer.from(src).toString('base64url')
+  assert.equal(cloudinaryBlurUrl('nube1', src),
+    'https://res.cloudinary.com/nube1/image/fetch/' +
+    'w_1080,h_1080,c_fill,e_blur:2000/' +
+    `l_fetch:${b64},w_1080,h_1080,c_fit/fl_layer_apply/` +
+    'f_jpg,q_90/' + encodeURIComponent(src))
+})
+
+test('cloudinaryBlurUrl: historia 1080x1920 con banner l_disponible al sur', () => {
+  const u = cloudinaryBlurUrl('nube1', 'https://x.com/f.jpg', true)
+  assert.ok(u.includes('w_1080,h_1920,c_fill,e_blur:2000/'))
+  assert.ok(u.includes(',w_1080,h_1920,c_fit/fl_layer_apply/'))
+  assert.ok(u.includes('/l_disponible/fl_layer_apply,g_south,y_230/f_jpg,q_90/'))
 })
 
 test('fmtCLP separa miles con punto', () => {

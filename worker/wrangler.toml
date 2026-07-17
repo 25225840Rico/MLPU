@@ -9,6 +9,10 @@ ML_SITE_ID = "MLC"
 # IG User ID de la cuenta Business (se obtiene en la puesta en marcha, Task 7).
 IG_USER_ID = "17841476463162844"
 PUBLIC_URL = "https://mlpu-proxy.aronricocl.workers.dev"
+# Cloud name de la cuenta Cloudinary (plan free): eslabón principal de la
+# cadena de imágenes IG (mismo blur + banner pero sin CPU del Worker, que en
+# plan Free corta el compositor propio con error 1102). Vacío = se salta.
+CLOUDINARY_CLOUD = ""
 
 # KV: almacena la sesión OAuth de ML (access_token + refresh_token).
 # Crear con:  wrangler kv namespace create ML_TOKENS

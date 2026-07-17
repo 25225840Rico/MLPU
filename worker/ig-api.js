@@ -4,7 +4,7 @@
  * Worker no puede escribir secrets; se renueva vía fb_exchange_token.
  */
 
-import { maxResPicture, blurImageUrl, liteImageUrl } from './ig-logic.js'
+import { maxResPicture, blurImageUrl, liteImageUrl, cloudinaryBlurUrl } from './ig-logic.js'
 
 const GRAPH = 'https://graph.facebook.com/v21.0'
 const REFRESH_AFTER_MS = 45 * 24 * 3600 * 1000 // renovar a los 45 días (expira a los 60)
@@ -83,16 +83,20 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
     return pub.id
   }
   if (raw) return attempt(imageUrl)
-  // El fondo blur (y el banner en historias) es OBLIGATORIO: ambos eslabones
-  // son el compositor propio (completo → lite). Si los dos fallan, se lanza y
-  // la fila reintenta después (mejor que publicar sin blur, que era lo que
-  // pasaba con los viejos fallbacks wsrv/URL original). Solo se cae al
+  // Cadena de fallback (2026-07-17): Cloudinary primero — mismo efecto blur +
+  // banner pero SIN CPU del Worker, porque el compositor propio excede el
+  // límite del plan Free (error 1102) bajo carga sostenida y Meta recibía
+  // texto en vez de JPEG ("Only photo or video can be accepted"). Después el
+  // compositor propio (blur → lite) y, como último salvavidas, la URL original
+  // (sin blur: mejor publicar que dejar la fila en error). Solo se cae al
   // siguiente eslabón ante errores de imagen/descarga; un rate-limit o token
   // vencido fallaría igual en todos y duplicaría llamadas.
   const best = maxResPicture(imageUrl)
   const cadena = [
+    ...(env.CLOUDINARY_CLOUD ? [cloudinaryBlurUrl(env.CLOUDINARY_CLOUD, best, story)] : []),
     blurImageUrl(env.PUBLIC_URL, best, story),
     liteImageUrl(env.PUBLIC_URL, best, story),
+    imageUrl,
   ]
   for (let i = 0; ; i++) {
     try {
