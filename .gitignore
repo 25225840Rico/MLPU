@@ -10,3 +10,11 @@ worker/.wrangler/
 
 # Carpeta de trabajo interna duplicada del worker
 worker/progress/
+
+# Python
+__pycache__/
+bot-python/progress/
+
+# Exports/backups de datos generados por sesiones de trabajo (no versionar)
+inventario_ML_*.xlsx
+precios_backup_*.csv

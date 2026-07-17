@@ -11,7 +11,7 @@ function cleanTitle(title, maxLen = 60) {
     .slice(0, maxLen)
 }
 
-export async function compressImage(b64, maxW = 1024, quality = 0.82) {
+async function compressImage(b64, maxW = 1024, quality = 0.82) {
   return new Promise(resolve => {
     const img = new Image()
     img.onload = () => {

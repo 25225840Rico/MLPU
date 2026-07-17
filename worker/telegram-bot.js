@@ -332,36 +332,6 @@ async function sendStart(env, chatId) {
     { reply_markup: MAIN_KB })
 }
 
-async function sendHistory(env, chatId, page = 0) {
-  const all = await listOrders(env, 1000)
-  if (!all.length) return tgSend(env, chatId, 'Tu historial está vacío todavía.', { reply_markup: MAIN_KB })
-  const PAGE = 8
-  const pages = Math.ceil(all.length / PAGE)
-  page = Math.max(0, Math.min(page, pages - 1))
-  const slice = all.slice(page * PAGE, page * PAGE + PAGE)
-
-  const totalCLP = all
-    .filter(o => (o.currency || 'CLP') === 'CLP')
-    .reduce((s, o) => s + (Number(o.amount) || 0), 0)
-
-  const lines = slice.map(o => {
-    const fecha = (o.fecha || '').slice(0, 10)
-    return `• <code>${o.order_id}</code> · ${fecha} · ${statusEs(o.status)}\n` +
-           `   ${o.buyer_name} · ${o.product} · ${fmtMoney(o.amount, o.currency)}`
-  })
-
-  const nav = []
-  if (page > 0)          nav.push({ text: '◀ Anterior',  callback_data: `hist:${page - 1}` })
-  if (page < pages - 1)  nav.push({ text: 'Siguiente ▶', callback_data: `hist:${page + 1}` })
-  const kb = slice.map(o => [{ text: `🔎 ${o.order_id} · ${o.buyer_name}`, callback_data: `ver:${o.order_id}` }])
-  if (nav.length) kb.push(nav)
-
-  await tgSend(env, chatId,
-    `📚 <b>Historial de ventas</b> — ${all.length} en total · ${fmtMoney(totalCLP, 'CLP')}\n` +
-    `Página ${page + 1}/${pages}\n\n${lines.join('\n')}`,
-    { reply_markup: { inline_keyboard: kb } })
-}
-
 // Lista de pendientes para elegir a qué orden asignar el tracking leído.
 async function sendPendingChoice(env, chatId, pending, data) {
   const slice = pending.slice(0, 10)
@@ -405,18 +375,18 @@ const IG_PANEL_KB = { inline_keyboard: [
 ] }
 
 export async function sendIgPanel(env, chatId) {
-  const [auto, pausado, pend, pub] = await Promise.all([
+  const [auto, pausado, counts] = await Promise.all([
     getAuto(env), isPausado(env),
-    env.DB.prepare("SELECT COUNT(*) n FROM ig_queue WHERE estado='pendiente'").first(),
-    env.DB.prepare("SELECT COUNT(*) n FROM ig_queue WHERE estado='publicado'").first(),
+    env.DB.prepare("SELECT estado, COUNT(*) n FROM ig_queue WHERE estado IN ('pendiente','publicado') GROUP BY estado").all(),
   ])
+  const n = Object.fromEntries((counts.results || []).map(r => [r.estado, r.n]))
   const modo = pausado ? '⏸ PAUSADO'
     : auto?.rush ? '🔥 RUSH (subida masiva hasta llenar el cupo diario)'
     : auto?.intervalo_min ? `🚿 Goteo: 1 cada ~${auto.intervalo_min} min`
     : '🕐 Por ventanas (clásico)'
   return tgSend(env, chatId,
     `📸 <b>Panel de Instagram</b> — @topwheels.cl\n\n` +
-    `Modo: <b>${modo}</b>\nCola: <b>${pend?.n ?? 0} pendientes</b> · ${pub?.n ?? 0} publicados\n` +
+    `Modo: <b>${modo}</b>\nCola: <b>${n.pendiente ?? 0} pendientes</b> · ${n.publicado ?? 0} publicados\n` +
     `Horario de publicación: 09:00–23:00 (Chile)`,
     { reply_markup: IG_PANEL_KB })
 }
@@ -451,7 +421,7 @@ async function handleIgCommand(env, chatId, args, ctx) {
     const job = (async () => {
       try {
         const r = await runIgPublisher(env, { force: true, notify, max })
-        if (r.enCurso) return tgSend(env, chatId, '⏳ Ya hay una publicación en curso; no lancé otra. Si no llegan avisos, el candado se libera solo en ~5 min y podés reintentar.')
+        if (r.enCurso) return tgSend(env, chatId, '⏳ Ya hay una publicación en curso; no lancé otra. Si no llegan avisos, el candado se libera solo en ~3 min y podés reintentar.')
         if (r.pausado) return tgSend(env, chatId, `⏸ La cola está pausada${r.publicados ? ` (alcancé a publicar ${r.publicados})` : '; no publiqué nada'}. Reanudar: /ig seguir`)
         return tgSend(env, chatId, r.publicados ? `✅ Listo: ${r.publicados} producto(s) publicados en IG.` : 'No había nada publicable en la cola.')
       } catch (e) { return tgSend(env, chatId, `❌ IG falló: ${esc(e.message)}`) }
@@ -630,7 +600,6 @@ async function handleCallback(env, cq, ctx) {
     return tgApi(env, 'editMessageCaption',
       { chat_id: chatId, message_id: cq.message.message_id, caption: 'Cancelado. La promo no se publicó.' })
   }
-  if (data.startsWith('hist:')) return sendHistory(env, chatId, parseInt(data.slice(5), 10) || 0)
   // ── Módulo 1: historial real desde ML ──
   if (data === 'hmenu')          return sendHistoryMenu(env, chatId)
   if (data === 'hsearch')        return sendMlSearchPrompt(env, chatId)
@@ -1102,15 +1071,6 @@ async function analyzeStickerPhoto(env, chatId, msg) {
   // Ambiguo o sin coincidencia clara → lista para elegir (con botones).
   await setPending(env, chatId, { tracking_number: data.tracking_number, recipient_name: data.recipient_name })
   await sendPendingChoice(env, chatId, pending, data)
-}
-
-function pendingListText(pending, data) {
-  const lines = pending.slice(0, 10).map((o, i) =>
-    `${i + 1}. <code>${o.order_id}</code> — ${o.buyer_name} — ${o.product}`)
-  return `📦 Tracking: <code>${data.tracking_number}</code>\n` +
-         `👤 Destinatario leído: ${data.recipient_name || '—'}\n\n` +
-         `No encontré una coincidencia clara. Órdenes pendientes:\n${lines.join('\n')}\n\n` +
-         `Asigná con: <code>/asignar &lt;order_id&gt;</code>`
 }
 
 async function doAssign(env, chatId, orderId, tracking) {
