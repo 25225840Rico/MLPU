@@ -1,6 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fmtCLP, buildCaption, pickBestWindows, isInWindow, windowKey, FALLBACK_WINDOWS, maxResPicture, padImageUrl } from '../ig-logic.js'
+import { fmtCLP, buildCaption, pickBestWindows, isInWindow, windowKey, FALLBACK_WINDOWS, maxResPicture, padImageUrl, padOwnImageUrl } from '../ig-logic.js'
+
+test('padOwnImageUrl: compositor propio en modo pad (con s=1 en historias)', () => {
+  assert.equal(
+    padOwnImageUrl('https://pub.test', 'https://http2.mlstatic.com/a-F.jpg', true),
+    'https://pub.test/ig/img?u=' + encodeURIComponent('https://http2.mlstatic.com/a-F.jpg') + '&s=1&m=pad')
+  assert.ok(!padOwnImageUrl('https://pub.test', 'https://x/y.jpg', false).includes('s=1'))
+})
 
 test('fmtCLP separa miles con punto', () => {
   assert.equal(fmtCLP(12990), '$12.990')

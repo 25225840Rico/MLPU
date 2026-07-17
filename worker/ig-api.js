@@ -4,7 +4,7 @@
  * Worker no puede escribir secrets; se renueva vía fb_exchange_token.
  */
 
-import { maxResPicture, padImageUrl, blurImageUrl } from './ig-logic.js'
+import { maxResPicture, padImageUrl, blurImageUrl, padOwnImageUrl } from './ig-logic.js'
 
 const GRAPH = 'https://graph.facebook.com/v21.0'
 const REFRESH_AFTER_MS = 45 * 24 * 3600 * 1000 // renovar a los 45 días (expira a los 60)
@@ -83,21 +83,23 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
     return pub.id
   }
   if (raw) return attempt(imageUrl)
-  // Cadena: fondo blur propio → padding blanco wsrv → URL original. Solo se cae
-  // al siguiente eslabón ante errores de imagen/descarga; un rate-limit o token
+  // Cadena de fallback: blur propio → pad propio (solo historias: conserva el
+  // banner DISPONIBLE) → padding blanco wsrv → URL original. Solo se cae al
+  // siguiente eslabón ante errores de imagen/descarga; un rate-limit o token
   // vencido fallaría igual en todos y duplicaría llamadas.
   const best = maxResPicture(imageUrl)
-  try {
-    return await attempt(blurImageUrl(env.PUBLIC_URL, best, story))
-  } catch (e) {
-    if (!esErrorDeImagen(e)) throw e
-    log('fondo blur falló, reintento con padding blanco:', e.message)
+  const cadena = [
+    blurImageUrl(env.PUBLIC_URL, best, story),
+    ...(story ? [padOwnImageUrl(env.PUBLIC_URL, best, story)] : []),
+    padImageUrl(best, story),
+    imageUrl,
+  ]
+  for (let i = 0; ; i++) {
     try {
-      return await attempt(padImageUrl(best, story))
-    } catch (e2) {
-      if (!esErrorDeImagen(e2)) throw e2
-      log('padding falló, reintento con la URL original:', e2.message)
-      return attempt(imageUrl)
+      return await attempt(cadena[i])
+    } catch (e) {
+      if (i >= cadena.length - 1 || !esErrorDeImagen(e)) throw e
+      log(`imagen falló (${e.message}); fallback ${i + 2}/${cadena.length}`)
     }
   }
 }
