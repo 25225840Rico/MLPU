@@ -1,3 +1,74 @@
+SAVE — MLPU (2026-07-17, sesión 16 — fix "Only photo or video can be accepted")
+CAUSA RAÍZ: el compositor blur (photon) excede el CPU del plan FREE de
+Workers (10 ms) bajo carga → Cloudflare corta con error 1102 (503 texto) →
+Meta rechaza la image_url. Verificado con wrangler tail (outcome=exceededCpu).
+Al no existir ya fallbacks sin blur (bd57138), las filas morían en error.
+FIX (commit a4d41b1 pusheado, deploy 04b131ba, 64/64 tests): cadena nueva
+Cloudinary → blur propio → lite → URL original. cloudinaryBlurUrl replica el
+MISMO efecto (fondo c_fill+e_blur:2000, foto c_fit encima, banner
+l_disponible en historias) SIN CPU del worker. OJO: b_blurred es solo video.
+D1: 8 en error + 14 publicadas sin historia → reencoladas (103 pendientes).
+Cola PAUSADA por el usuario; modo auto apagado. NO sale nada hasta /ig seguir.
+PRÓXIMO PASO AL RETOMAR: (1) usuario crea cuenta free en cloudinary.com y
+pasa el CLOUD NAME; (2) poner CLOUDINARY_CLOUD en wrangler.toml + deploy;
+(3) en Cloudinary: Settings→Security permitir fetch (dominio mlstatic.com)
+y subir worker/public/ig/disponible.png como public_id "disponible";
+(4) probar la URL de cloudinaryBlurUrl con una foto real (feed e historia);
+(5) /ig seguir + 🔥 Rush. Sin Cloudinary igual publica (blur a ratos,
+original como salvavidas), pero sin garantía de blur.
+PENDIENTE heredado: rotar App Secret Meta (s13) · Tundra id 4.
+Detalle: progress/log/2026-07-17-fix-cpu-1102.md
+
+SAVE — MLPU (2026-07-17, sesión 15 — parte 3, cierre)
+BLUR OBLIGATORIO + REHISTORIAS + BORRAR HISTORIAS, EN PRODUCCIÓN
+(commits bd57138 + 566c4e8 pusheados; deploy efb1f801; 62/62 tests).
+1) Blur SÍ O SÍ: la cadena ahora es compositor blur → blur lite (ambos con
+   fondo blur + banner); wsrv/URL original ELIMINADOS. Si ambos fallan, la
+   fila reintenta (3 intentos + aviso) en vez de salir sin blur.
+2) /ig rehistorias (botón 🔁): re-encola TODO lo publicado para SOLO HISTORIA
+   (el feed no se repite: se conserva ig_media_id y la idempotencia lo salta),
+   priorizado por interacciones del feed (likes+comentarios, batch de 50).
+   Columna nueva ig_queue.prioridad (migrada en remote). Luego /ig rush.
+3) /ig borrarhistorias (botón 🧹): borra de IG las historias vivas (<24 h)
+   vía DELETE Graph v25 en tandas de 35. OJO: puede requerir regenerar el
+   token de Meta con permiso instagram_manage_contents (el bot avisa si falta).
+PRÓXIMO PASO AL RETOMAR: probar en Telegram el flujo completo:
+🧹 Borrar historias → 🔁 Rehistorias → 🔥 Rush YA; si el borrado falla por
+permisos, regenerar token Meta con instagram_manage_contents y re-sembrarlo.
+PENDIENTE heredado: rotar App Secret Meta (s13) · Tundra id 4.
+Detalle: progress/CHECKPOINT.md · progress/log/2026-07-17.md
+
+SAVE — MLPU (2026-07-17, sesión 15 — parte 2, cierre)
+BANNER DISPONIBLE CONSISTENTE + PROMO REDISEÑADA, EN PRODUCCIÓN (commits
+edfa653 limpieza + e6ec795 IG, pusheados; deploy 5837d7b4 VERIFICADO; 59/59).
+Causa del banner intermitente: solo lo estampa el compositor blur propio; si
+fallaba, la historia salía por wsrv/URL original SIN banner. Fix: composePad
+(fondo blanco barato, m=pad) como fallback de historias que CONSERVA el
+banner; cadena: blur → pad propio → wsrv → original (feed sin cambios).
+Banner rediseñado (gradiente verde, borde blanco, sombra) y promo.png nueva
+(fondo oscuro, bandera a cuadros, pills couriers, CTA "📩 PÍDELO POR DM").
+Verificado en prod: /ig/img?m=pad compone foto real + banner (200 OK);
+/ig/promo.png sirve el rediseño.
+PRÓXIMO PASO AL RETOMAR: probar /ig promo por Telegram (subir la historia
+nueva) y mirar la próxima historia del rush (debe llevar SIEMPRE el banner).
+PENDIENTE heredado: rotar App Secret Meta (s13) · Tundra id 4 · panel /start.
+Detalle: progress/CHECKPOINT.md · progress/log/2026-07-17.md
+
+SAVE — MLPU (2026-07-17, sesión 15 — limpieza del monorepo)
+AUDITORÍA + LIMPIEZA COMPLETA a pedido del usuario (optimizar/limpiar/
+simplificar/robustecer). Cambios SIN commitear en main (4 archivos, +22/−65):
+telegram-bot.js sin código muerto (sendHistory + hist: + pendingListText),
+ml-history.js con retry unificado sobre mlFetch, panel IG con 1 query GROUP BY,
+mensaje del candado corregido (3 min), .gitignore para __pycache__/progress de
+bot-python y xlsx/csv de datos, compressImage ya no se exporta en el SPA.
+SPA y bot-python auditados: sin funciones muertas. 57/57 tests · vite build OK.
+NO se tocó: scheduler.js (apagado ADREDE, no es muerto), App.jsx a fondo,
+modelo sonnet de tracking.js (decisión del usuario si abaratar a haiku).
+PRÓXIMO PASO AL RETOMAR: commitear la limpieza + re-deploy del worker sin
+apuro (el deploy 2ad74816 sigue operativo e idéntico en comportamiento).
+PENDIENTE heredado: rotar App Secret Meta (s13) · Tundra id 4 · panel /start.
+Detalle: progress/CHECKPOINT.md · progress/log/2026-07-17.md
+
 SAVE — MLPU (2026-07-16, sesión 14 — parte 4, cierre)
 RUSH INMEDIATO + PANEL DE BOTONES EN PRODUCCIÓN (commit d49e373 pusheado,
 deploy 2ad74816, 57/57 tests). Cron del publisher CADA 1 MINUTO: en rush es
