@@ -107,6 +107,38 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
 const esErrorDeImagen = (e) => /image|photo|media|download|fetch|url/i.test(e.message) &&
   !/rate|limit|token|permission|oauth|not available/i.test(e.message)
 
+// Borra un media de IG (post, historia o reel). Soportado por la Graph API
+// con Facebook Login (DELETE /<media_id>); requiere que el token tenga el
+// permiso instagram_manage_contents. Las historias expiran solas a las 24 h,
+// así que solo tiene sentido para historias "vivas".
+export async function igDeleteMedia(env, mediaId) {
+  const token = await getMetaToken(env.DB)
+  const r = await fetch(`https://graph.facebook.com/v25.0/${mediaId}?access_token=${encodeURIComponent(token)}`,
+    { method: 'DELETE' })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok || data.error) throw new Error(data.error?.message || `delete ${r.status}`)
+  return true
+}
+
+// Interacciones (likes + comentarios) de posts del feed, en lotes de hasta 50
+// ids por llamada (?ids=). Best-effort: un lote fallido deja esos ids sin dato
+// (prioridad 0), no aborta el resto.
+export async function fetchMediaInteractions(env, mediaIds) {
+  const token = await getMetaToken(env.DB)
+  const out = {}
+  for (let i = 0; i < mediaIds.length; i += 50) {
+    const chunk = mediaIds.slice(i, i + 50)
+    const r = await fetch(`${GRAPH}/?ids=${chunk.join(',')}&fields=like_count,comments_count&access_token=${encodeURIComponent(token)}`)
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok || data.error) { log('interacciones falló:', data.error?.message || r.status); continue }
+    for (const id of chunk) {
+      const m = data[id]
+      if (m) out[id] = (m.like_count || 0) + (m.comments_count || 0)
+    }
+  }
+  return out
+}
+
 // Cupo de publicación por API de Meta (ventana móvil de 24 h). Verificado
 // 2026-07-16 en @topwheels.cl: quota_total=100 y las HISTORIAS también cuentan.
 export async function fetchPublishingQuota(env) {

@@ -7,11 +7,12 @@ export class FakeDB {
   async getConfig(clave) { return this.config.get(clave) }
   seedQueue(row) {
     const r = { id: this.nextId++, estado: 'pendiente', intentos: 0, ultimo_error: null,
-      ig_media_id: null, ig_story_id: null, publicado_en: null, ...row }
+      ig_media_id: null, ig_story_id: null, publicado_en: null, prioridad: 0, ...row }
     this.queue.push(r); return r
   }
 
   prepare(sql) { return makeStmt(this, sql, []) }
+  async batch(stmts) { const out = []; for (const s of stmts) out.push(await s.run()); return out }
 }
 
 function makeStmt(db, sql, args) {
@@ -48,6 +49,11 @@ function makeStmt(db, sql, args) {
         changes = 1
         if (sql.includes("estado='publicado'")) {
           Object.assign(row, { estado: 'publicado', ultimo_error: args[0] ?? null, publicado_en: new Date().toISOString() })
+        } else if (sql.includes('prioridad=?')) {
+          // requeueStories: vuelve a pendiente para solo-historia
+          Object.assign(row, { estado: 'pendiente', intentos: 0, ultimo_error: null, ig_story_id: null, prioridad: args[0] })
+        } else if (sql.includes('SET ig_story_id=NULL')) {
+          row.ig_story_id = null
         } else if (sql.includes('SET ig_media_id=?')) {
           row.ig_media_id = args[0]
         } else if (sql.includes('SET ig_story_id=?')) {
@@ -65,7 +71,16 @@ function makeStmt(db, sql, args) {
   }
   const all = async () => {
     if (sql.includes('FROM ig_queue')) {
-      let rows = db.queue.filter(r => r.estado === 'pendiente')
+      let rows
+      if (sql.includes("estado='publicado'") && sql.includes('ig_media_id IS NOT NULL')) {
+        rows = db.queue.filter(r => r.estado === 'publicado' && r.ig_media_id)
+      } else if (sql.includes('ig_story_id IS NOT NULL')) {
+        // historias vivas: publicadas hace menos de 24 h
+        const desde = Date.now() - 24 * 3600e3
+        rows = db.queue.filter(r => r.ig_story_id && r.publicado_en && Date.parse(r.publicado_en) > desde)
+      } else {
+        rows = db.queue.filter(r => r.estado === 'pendiente')
+      }
       const m = sql.match(/LIMIT (\d+)/)
       if (m) rows = rows.slice(0, Number(m[1]))
       return { results: rows }
@@ -85,9 +100,14 @@ function makeStmt(db, sql, args) {
     if (sql.includes('COUNT(*)') && sql.includes("estado='pendiente'")) {
       return { n: db.queue.filter(r => r.estado === 'pendiente').length }
     }
+    if (sql.includes('COUNT(*)') && sql.includes('ig_story_id IS NOT NULL')) {
+      const desde = Date.now() - 24 * 3600e3
+      return { n: db.queue.filter(r => r.ig_story_id && r.publicado_en && Date.parse(r.publicado_en) > desde).length }
+    }
     if (sql.includes('RETURNING') && sql.includes("SET estado='publicando'")) {
-      // claimNext: toma atómicamente la primera fila pendiente
-      const row = db.queue.filter(r => r.estado === 'pendiente').sort((a, b) => a.id - b.id)[0]
+      // claimNext: prioridad DESC, luego id
+      const row = db.queue.filter(r => r.estado === 'pendiente')
+        .sort((a, b) => (b.prioridad || 0) - (a.prioridad || 0) || a.id - b.id)[0]
       if (!row) return null
       Object.assign(row, { estado: 'publicando', intentos: row.intentos + 1, claimed_en: new Date().toISOString() })
       return { ...row }

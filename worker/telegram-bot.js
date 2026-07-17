@@ -22,7 +22,7 @@ import {
   analyzeProduct, clusterPhotos, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
   getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto, setRush, RUSH_RESERVA } from './ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto, setRush, RUSH_RESERVA, requeueStories, borrarHistorias } from './ig-queue.js'
 import { fetchPublishingQuota } from './ig-api.js'
 import { fmtCLP } from './ig-logic.js'
 import { igPublishImage } from './ig-api.js'
@@ -371,6 +371,7 @@ const IG_PANEL_KB = { inline_keyboard: [
   [{ text: '⏸ Pausar', callback_data: 'igm:parar' }, { text: '▶️ Seguir', callback_data: 'igm:seguir' }],
   [{ text: '📋 Ver cola', callback_data: 'igm:cola' }, { text: '📦 Cargar stock', callback_data: 'igm:stock' }],
   [{ text: '🚀 Subir 3 ahora', callback_data: 'igm:ahora' }, { text: '📢 Historia promo', callback_data: 'igm:promo' }],
+  [{ text: '🔁 Rehistorias', callback_data: 'igm:rehist' }, { text: '🧹 Borrar historias', callback_data: 'igm:delhist' }],
   [{ text: '⛔ Modo off', callback_data: 'igm:off' }, { text: '🔄 Actualizar', callback_data: 'igm:panel' }],
 ] }
 
@@ -495,6 +496,37 @@ async function handleIgCommand(env, chatId, args, ctx) {
       `🔥 Modo RUSH activado: subida masiva YA (~2 productos por minuto, 09:00–23:00 Chile) hasta llenar el cupo diario de Meta; ` +
       `cuando se llene te aviso a qué hora se reabre y sigo solo al día siguiente.${cupoTxt}\nApagar: /ig rush off · Goteo suave: /ig auto 90`)
   }
+  if (sub === 'rehistorias') {
+    await tgSend(env, chatId, '⏳ Midiendo interacciones del feed y re-encolando historias…')
+    const job = (async () => {
+      try {
+        const r = await requeueStories(env)
+        if (!r.encoladas) return tgSend(env, chatId, 'No hay publicaciones del feed para re-historiar (nada en estado publicado).')
+        return tgSend(env, chatId,
+          `🔁 <b>${r.encoladas} historias re-encoladas</b>, ordenadas por interacciones del feed (likes + comentarios), SIN repetir los posts del feed.\n` +
+          'Actívalas con 🔥 Rush YA (masivo) o 🚿 Goteo. Los ítems vendidos/pausados se saltan solos.')
+      } catch (e) { return tgSend(env, chatId, `❌ Rehistorias falló: ${esc(e.message)}`) }
+    })()
+    if (ctx?.waitUntil) { ctx.waitUntil(job); return }
+    return job
+  }
+  if (sub === 'borrarhistorias') {
+    await tgSend(env, chatId, '⏳ Borrando de Instagram las historias vivas (las de las últimas 24 h; las demás ya expiraron solas)…')
+    const job = (async () => {
+      try {
+        const r = await borrarHistorias(env)
+        if (!r.borradas && !r.errores && !r.quedan)
+          return tgSend(env, chatId, 'No hay historias vivas registradas para borrar.')
+        return tgSend(env, chatId,
+          `🧹 Historias borradas de IG: <b>${r.borradas}</b>` +
+          (r.errores ? `\n⚠️ ${r.errores} no se pudieron borrar: ${esc((r.lastErr || '').slice(0, 200))}` +
+            (/permission/i.test(r.lastErr || '') ? '\n(El token de Meta necesita el permiso <code>instagram_manage_contents</code>; hay que regenerarlo con ese permiso.)' : '') : '') +
+          (r.quedan ? `\n➕ Quedan ${r.quedan}: tocá 🧹 Borrar historias de nuevo.` : ''))
+      } catch (e) { return tgSend(env, chatId, `❌ Borrar historias falló: ${esc(e.message)}`) }
+    })()
+    if (ctx?.waitUntil) { ctx.waitUntil(job); return }
+    return job
+  }
   if (sub === 'promo') {
     return tgApi(env, 'sendPhoto', {
       chat_id: chatId,
@@ -507,7 +539,7 @@ async function handleIgCommand(env, chatId, args, ctx) {
       ]] },
     })
   }
-  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig rush [off] · /ig auto [min|off] · /ig ahora [n] · /ig parar · /ig seguir · /ig horas · /ig promo')
+  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig rush [off] · /ig auto [min|off] · /ig ahora [n] · /ig rehistorias · /ig borrarhistorias · /ig parar · /ig seguir · /ig horas · /ig promo')
 }
 
 async function sendOrdersList(env, chatId) {
@@ -576,7 +608,8 @@ async function handleCallback(env, cq, ctx) {
     const acc = data.slice(4)
     if (acc === 'panel') return sendIgPanel(env, chatId)
     const map = { rush: 'rush', goteo: 'auto 90', parar: 'parar', seguir: 'seguir',
-                  cola: 'cola', stock: 'stock', ahora: 'ahora 3', promo: 'promo', off: 'auto off' }
+                  cola: 'cola', stock: 'stock', ahora: 'ahora 3', promo: 'promo', off: 'auto off',
+                  rehist: 'rehistorias', delhist: 'borrarhistorias' }
     if (map[acc]) return handleIgCommand(env, chatId, map[acc], ctx)
     return
   }

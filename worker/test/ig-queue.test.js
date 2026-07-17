@@ -364,3 +364,79 @@ test('enqueueStock: re-encola ítems cancelados (UPSERT), no los publicados', as
   assert.equal(row.titulo, 'FRESCO'); assert.equal(row.precio, 1234); assert.equal(row.permalink_ml, 'https://x/1')
   assert.equal(env.DB.queue.find(x => x.ml_item_id === 'MLC2').estado, 'publicado')
 })
+
+// ── Rehistorias y borrado de historias (2026-07-17) ──────────
+import { requeueStories, borrarHistorias } from '../ig-queue.js'
+
+test('requeueStories: re-encola publicados para solo-historia con prioridad por interacciones', async () => {
+  const env = mkEnv()
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1, estado: 'publicado', ig_media_id: 'M1', ig_story_id: 'S1', publicado_en: new Date().toISOString() })
+  env.DB.seedQueue({ ml_item_id: 'MLC2', titulo: 'B', precio: 1, estado: 'publicado', ig_media_id: 'M2', ig_story_id: 'S2', publicado_en: new Date().toISOString() })
+  env.DB.seedQueue({ ml_item_id: 'MLC3', titulo: 'C', precio: 1, estado: 'cancelado' })
+  env.DB.seedQueue({ ml_item_id: 'MLC4', titulo: 'D', precio: 1, estado: 'pendiente' })
+
+  const r = await requeueStories(env, { getInteractions: async () => ({ M1: 2, M2: 9 }) })
+  assert.equal(r.encoladas, 2)
+  const [a, b, c, d] = env.DB.queue
+  assert.equal(a.estado, 'pendiente')
+  assert.equal(a.ig_media_id, 'M1')   // el feed NO se repite (idempotencia)
+  assert.equal(a.ig_story_id, null)   // la historia sale de nuevo
+  assert.equal(a.prioridad, 2)
+  assert.equal(b.prioridad, 9)
+  assert.equal(c.estado, 'cancelado') // intactos
+  assert.equal(d.prioridad, 0)
+})
+
+test('rehistorias: el publisher saca primero la de más interacciones y publica SOLO historia', async () => {
+  const env = mkEnv()
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'Poco visto', precio: 1, estado: 'publicado', ig_media_id: 'M1', ig_story_id: 'S1', publicado_en: new Date().toISOString() })
+  env.DB.seedQueue({ ml_item_id: 'MLC2', titulo: 'Popular', precio: 1, estado: 'publicado', ig_media_id: 'M2', ig_story_id: 'S2', publicado_en: new Date().toISOString() })
+  await requeueStories(env, { getInteractions: async () => ({ M1: 1, M2: 50 }) })
+
+  const publicadas = []
+  const deps = {
+    getItem: async () => ({ status: 'active', pictures: [{ secure_url: 'https://pic/1.jpg' }] }),
+    publishImage: async (e, { story }) => { publicadas.push(story ? 'story' : 'feed'); return 'NEW' },
+  }
+  const avisos = []
+  const r = await runIgPublisher(env, { force: true, max: 1, deps, notify: async t => avisos.push(t) })
+  assert.equal(r.publicados, 1)
+  assert.deepEqual(publicadas, ['story'])              // ni un solo feed repetido
+  assert.equal(env.DB.queue[1].estado, 'publicado')    // salió el Popular (prioridad 50)
+  assert.equal(env.DB.queue[1].ig_story_id, 'NEW')
+  assert.equal(env.DB.queue[0].estado, 'pendiente')
+  assert.match(avisos.join(' '), /Historia re-subida/)
+})
+
+test('borrarHistorias: borra las vivas (<24h), limpia ig_story_id y reporta errores', async () => {
+  const env = mkEnv()
+  const hace2h = new Date(Date.now() - 2 * 3600e3).toISOString()
+  const hace30h = new Date(Date.now() - 30 * 3600e3).toISOString()
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1, estado: 'publicado', ig_media_id: 'M1', ig_story_id: 'S1', publicado_en: hace2h })
+  env.DB.seedQueue({ ml_item_id: 'MLC2', titulo: 'B', precio: 1, estado: 'publicado', ig_media_id: 'M2', ig_story_id: 'S2', publicado_en: hace2h })
+  env.DB.seedQueue({ ml_item_id: 'MLC3', titulo: 'C', precio: 1, estado: 'publicado', ig_media_id: 'M3', ig_story_id: 'S3', publicado_en: hace30h }) // ya expiró: no se toca
+
+  const borrados = []
+  const r = await borrarHistorias(env, { deleteMedia: async (e, id) => {
+    if (id === 'S2') throw new Error('(#10) Application does not have permission for this action')
+    borrados.push(id)
+  } })
+  assert.deepEqual(borrados, ['S1'])
+  assert.equal(r.borradas, 1)
+  assert.equal(r.errores, 1)
+  assert.match(r.lastErr, /permission/)
+  assert.equal(env.DB.queue[0].ig_story_id, null)  // borrada → limpia
+  assert.equal(env.DB.queue[1].ig_story_id, 'S2')  // error real → conserva el id
+  assert.equal(env.DB.queue[2].ig_story_id, 'S3')  // expirada hace >24h → fuera del alcance
+  assert.equal(r.quedan, 1)
+})
+
+test('borrarHistorias: historia ya inexistente en IG limpia el id sin contar error', async () => {
+  const env = mkEnv()
+  env.DB.seedQueue({ ml_item_id: 'MLC1', titulo: 'A', precio: 1, estado: 'publicado', ig_media_id: 'M1', ig_story_id: 'S1', publicado_en: new Date().toISOString() })
+  const r = await borrarHistorias(env, { deleteMedia: async () => { throw new Error('Object with ID does not exist') } })
+  assert.equal(r.borradas, 0)
+  assert.equal(r.errores, 0)
+  assert.equal(env.DB.queue[0].ig_story_id, null)
+  assert.equal(r.quedan, 0)
+})

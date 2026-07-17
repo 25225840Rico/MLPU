@@ -15,7 +15,7 @@
  * enqueueStock: carga inicial con el inventario activo ya publicado en ML.
  */
 import { buildCaption, windowKey, pickBestWindows, enHorarioAuto, horaChile, FALLBACK_WINDOWS } from './ig-logic.js'
-import { igPublishImage, fetchOnlineFollowers, fetchPublishingQuota, maybeRefreshMetaToken } from './ig-api.js'
+import { igPublishImage, fetchOnlineFollowers, fetchPublishingQuota, maybeRefreshMetaToken, fetchMediaInteractions, igDeleteMedia } from './ig-api.js'
 import { mlFetch } from './ml-fetch.js'
 
 const MAX_POR_VENTANA = 3
@@ -152,10 +152,11 @@ const releaseLock = env => env.DB.prepare("DELETE FROM ig_config WHERE clave='co
 
 // Toma atómicamente la próxima fila pendiente (estado='publicando' + intento
 // contado). Con esto, dos corridas en paralelo NUNCA publican el mismo ítem.
+// Orden: prioridad DESC (interacciones del feed, ver requeueStories) y luego id.
 async function claimNext(env) {
   return env.DB.prepare(
     `UPDATE ig_queue SET estado='publicando', intentos=intentos+1, claimed_en=datetime('now')
-     WHERE id=(SELECT id FROM ig_queue WHERE estado='pendiente' ORDER BY id LIMIT 1)
+     WHERE id=(SELECT id FROM ig_queue WHERE estado='pendiente' ORDER BY prioridad DESC, id LIMIT 1)
      RETURNING *`).first()
 }
 
@@ -180,6 +181,7 @@ async function publicarFila(env, row, { publishImage, getItem, notify }) {
   const foto = item.pictures?.[0]?.secure_url
   if (!foto) throw new Error('el ítem no tiene fotos en ML')
 
+  const teniaFeed = !!row.ig_media_id  // re-historia: el feed no se repite
   let feedId = row.ig_media_id
   if (!feedId) {
     feedId = await publishImage(env, { imageUrl: foto, caption: buildCaption({ titulo: row.titulo, precio: row.precio }) })
@@ -201,8 +203,10 @@ async function publicarFila(env, row, { publishImage, getItem, notify }) {
     "UPDATE ig_queue SET estado='publicado', publicado_en=datetime('now'), ultimo_error=? WHERE id=?")
     .bind(storyErr && `historia: ${storyErr.slice(0, 290)}`, row.id).run()
   await notify(storyErr
-    ? `📸 Subido a IG: ${row.titulo} (solo feed; la historia falló: ${storyErr})`
-    : `📸 Subido a IG: ${row.titulo} (feed + historia)`)
+    ? (teniaFeed ? `⚠️ IG: la historia de "${row.titulo}" falló: ${storyErr}`
+                 : `📸 Subido a IG: ${row.titulo} (solo feed; la historia falló: ${storyErr})`)
+    : (teniaFeed ? `📸 Historia re-subida a IG: ${row.titulo}`
+                 : `📸 Subido a IG: ${row.titulo} (feed + historia)`))
   return true
 }
 
@@ -309,6 +313,54 @@ export async function enqueueStock(env, deps = {}) {
   }
   log(`enqueueStock: ${ids.length} activos, ${encolados} encolados nuevos`)
   return { total: ids.length, encolados }
+}
+
+// Re-encola para SOLO HISTORIA todo lo ya publicado en el feed: la fila
+// vuelve a 'pendiente' CONSERVANDO ig_media_id (la idempotencia de
+// publicarFila salta el feed → no se repite el post) y limpiando ig_story_id
+// (sale una historia nueva). prioridad = likes+comentarios del post del feed,
+// así el rush/goteo saca primero los productos con más interacciones.
+// Ítems vendidos/pausados se cancelan solos al publicar (status != active).
+export async function requeueStories(env, deps = {}) {
+  const getInteractions = deps.getInteractions || fetchMediaInteractions
+  const { results } = await env.DB.prepare(
+    "SELECT id, ig_media_id FROM ig_queue WHERE estado='publicado' AND ig_media_id IS NOT NULL").all()
+  const rows = results || []
+  if (!rows.length) return { encoladas: 0 }
+  let inter = {}
+  try { inter = await getInteractions(env, rows.map(r => r.ig_media_id)) }
+  catch (e) { logErr('interacciones:', e.message) } // sin datos → todo prioridad 0
+  await env.DB.batch(rows.map(r => env.DB.prepare(
+    `UPDATE ig_queue SET estado='pendiente', intentos=0, ultimo_error=NULL,
+       ig_story_id=NULL, prioridad=? WHERE id=?`).bind(inter[r.ig_media_id] || 0, r.id)))
+  log(`requeueStories: ${rows.length} re-encoladas (${Object.keys(inter).length} con interacciones)`)
+  return { encoladas: rows.length }
+}
+
+// Borra de IG todas las historias "vivas" (las publicadas hace <24 h; las
+// demás ya expiraron solas). Tanda de hasta 35 por invocación (presupuesto de
+// subrequests del Worker); si quedan, se repite el comando. Requiere el
+// permiso instagram_manage_contents en el token de Meta.
+export async function borrarHistorias(env, deps = {}) {
+  const deleteMedia = deps.deleteMedia || igDeleteMedia
+  const vivas = "ig_story_id IS NOT NULL AND publicado_en > datetime('now','-24 hours')"
+  const { results } = await env.DB.prepare(
+    `SELECT id, ig_story_id FROM ig_queue WHERE ${vivas} ORDER BY id LIMIT 35`).all()
+  let borradas = 0, errores = 0, lastErr = null
+  for (const r of (results || [])) {
+    try {
+      await deleteMedia(env, r.ig_story_id)
+      borradas++
+      await env.DB.prepare('UPDATE ig_queue SET ig_story_id=NULL WHERE id=?').bind(r.id).run()
+    } catch (e) {
+      if (/does not exist|cannot be loaded|unsupported|missing permissions on the object/i.test(e.message)) {
+        // ya expiró o se borró a mano: limpiar el id igual
+        await env.DB.prepare('UPDATE ig_queue SET ig_story_id=NULL WHERE id=?').bind(r.id).run()
+      } else { errores++; lastErr = e.message }
+    }
+  }
+  const resto = await env.DB.prepare(`SELECT COUNT(*) n FROM ig_queue WHERE ${vivas}`).first()
+  return { borradas, errores, lastErr, quedan: resto?.n ?? 0 }
 }
 
 export async function runIgDaily(env, notify = async () => {}) {

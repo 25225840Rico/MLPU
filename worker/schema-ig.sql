@@ -10,12 +10,14 @@ CREATE TABLE IF NOT EXISTS ig_queue (
   ultimo_error TEXT,
   ig_media_id  TEXT, -- se guarda APENAS sale el feed (idempotencia: un reintento no lo repite)
   ig_story_id  TEXT,
+  prioridad    INTEGER NOT NULL DEFAULT 0, -- interacciones del feed (requeueStories); el publisher saca primero la más alta
   creado_en    TEXT NOT NULL DEFAULT (datetime('now')),
   publicado_en TEXT,
   claimed_en   TEXT -- cuándo una corrida reclamó la fila ('publicando'); >15 min → se recupera
 );
--- Migración sobre bases existentes (ya aplicada en remote 2026-07-16):
---   ALTER TABLE ig_queue ADD COLUMN claimed_en TEXT;
+-- Migraciones sobre bases existentes:
+--   ALTER TABLE ig_queue ADD COLUMN claimed_en TEXT;              (aplicada en remote 2026-07-16)
+--   ALTER TABLE ig_queue ADD COLUMN prioridad INTEGER NOT NULL DEFAULT 0;  (aplicada en remote 2026-07-17)
 
 -- Config clave/valor (JSON en valor): ventanas, ventanas_manual, meta_token, ultima_corrida
 CREATE TABLE IF NOT EXISTS ig_config (
