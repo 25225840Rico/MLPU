@@ -33,10 +33,18 @@ anti-duplicados funcionó — y murió reclamando id 3). Solución: **goteo por 
 (`/ig auto <min>` / `off`, 1 por tick, corridas cortas = confiables), cron */15,
 lock TTL 5 min, aviso al vaciar la cola. Commit af09e1d, deploy 60bd0749.
 
+## Resultado del día (verificado 01:38 UTC 17/07)
+✔ Rush subió ~37 productos hoy (48 publicados total; 37 confirmados en el feed
+real de @topwheels.cl). Cupo lleno ~20:18 UTC → alerta enviada → siesta hasta
+02:13 UTC (22:13 Chile); retoma solo. Quedan ~96 pendientes (~2 días).
+
 ## PRÓXIMO paso accionable
-1. Confirmar cadencia del rush inmediato post-deploy 15:45 UTC (~2/min;
-   background b8z1i05sp) y que la alerta de cupo llegue al llenarse (~16:10).
-   Probar el panel: botón 📸 Instagram en Telegram.
+1. El usuario NO VE la botonera nueva: Telegram no refresca el reply keyboard
+   hasta un mensaje nuevo con el teclado → debe mandar /start (refresca la
+   botonera con 📸 Instagram) o /ig (abre el panel inline directo). YA se le
+   explicó; confirmar que le funcionó.
+2. Chequeo de salud al retomar: SELECT estado,COUNT(*) FROM ig_queue GROUP BY
+   estado (pendientes bajando ~48/día, sin 'publicando' viejas ni 'error').
 2. **SEGURIDAD (heredado s13)**: rotar App Secret en panel Meta →
    `wrangler secret put META_APP_SECRET`.
 3. Decidir si re-publicar la Tundra (id 4): DB dice publicado pero el usuario

@@ -31,14 +31,22 @@ Rush con guardas baratas por tick: horario 09-23 Chile -> COUNT pendientes ->
 siesta (rush_avisado.reabre) -> recien ahi consulta el cupo real de Meta
 (content_publishing_limit, 100/24h, historias cuentan, reserva 4).
 
-PROXIMO PASO EXACTO: seguimiento pasivo:
-1) Hoy ~16:10 UTC el cupo deberia llegar a ~100/100 -> debe llegar UNA alerta
-   "Cupo diario de Meta lleno (~HH:MM de reapertura)"; retoma solo (siesta).
+RESULTADO VERIFICADO (01:38 UTC 17/07): el rush subio ~37 productos el 16/07
+(48 publicados total en ig_queue; 37 confirmados en el feed real de
+@topwheels.cl via Graph API). Cupo lleno ~20:18 UTC -> alerta enviada ->
+siesta (rush_avisado.reabre=2026-07-17T02:13Z); retoma solo. Quedan ~96
+pendientes (~2 dias para vaciar la cola).
+
+PROXIMO PASO EXACTO:
+1) ULTIMO TEMA ABIERTO: el usuario dijo "no los veo" (los botones). Causa:
+   Telegram no refresca el reply keyboard hasta que el bot manda un mensaje
+   nuevo con el teclado. Ya se le indico: mandar /start (refresca botonera
+   con el boton Instagram) o /ig (abre el panel inline directo). CONFIRMAR
+   con el usuario que ya ve el panel y que le acomoda.
 2) Chequeo de salud al retomar la sesion:
    cd worker && npx wrangler d1 execute mlpu-db --remote --command
    "SELECT estado, COUNT(*) FROM ig_queue GROUP BY estado"
    -> pendientes bajando ~48/dia, sin 'publicando' viejas, sin 'error'.
-3) Confirmar con el usuario que el panel de botones le acomoda.
 Si algo fallo: revisar ultimo_error en ig_queue y logs con wrangler tail.
 
 PENDIENTES DEL USUARIO:
