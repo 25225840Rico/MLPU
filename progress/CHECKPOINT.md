@@ -1,13 +1,15 @@
 # CHECKPOINT — MLPU
 
-**Última sesión:** 2026-07-16 (sesión 14) | **Rama:** main (1423030, pusheado) |
-**Worker Version:** d4c96a82 | **Webhook:** ACTIVO | **Crons:** */15 (IG publisher) + 0 10 UTC (IG daily) | **Tests:** 56/56
+**Última sesión:** 2026-07-16 (sesión 14) | **Rama:** main (d49e373, pusheado) |
+**Worker Version:** 2ad74816 | **Webhook:** ACTIVO | **Crons:** * * * * * (IG publisher, cada 1 min) + 0 10 UTC (IG daily) | **Tests:** 57/57
 
-## Fase actual: MLPU-INSTAGRAM — MODO RUSH EN PRODUCCIÓN
-Anti-duplicados + `/ig auto` (goteo) + `/ig rush` desplegados. **RUSH ACTIVO**:
-3 productos por tick de 15 min (09:00–23:00 Chile) hasta llenar el cupo REAL de
-Meta (100/24 h, historias cuentan → ~48 ítems/día); al llenarse avisa la hora
-de reapertura y retoma solo. 133 pendientes → cola vacía en ~3 días.
+## Fase actual: MLPU-INSTAGRAM — RUSH INMEDIATO + PANEL DE BOTONES
+**RUSH ACTIVO**: subida masiva continua (~2 productos/min, tandas cortas
+encadenadas por el cron de 1 min, 09:00–23:00 Chile) hasta llenar el cupo REAL
+de Meta (100/24 h, historias cuentan; reserva 4). Cupo lleno → 1 aviso con hora
+de reapertura + "siesta" sin gastar Graph API; retoma solo. Control por BOTONES:
+botón 📸 Instagram → panel inline (Rush YA/Goteo/Pausar/Seguir/Cola/Stock/
+Subir 3/Promo/Off/Actualizar); los comandos /ig siguen operativos.
 
 ## Qué se completó esta sesión (2026-07-16)
 1. **Diagnóstico con evidencia** (D1 + Graph API): 3 causas raíz —
@@ -32,9 +34,9 @@ anti-duplicados funcionó — y murió reclamando id 3). Solución: **goteo por 
 lock TTL 5 min, aviso al vaciar la cola. Commit af09e1d, deploy 60bd0749.
 
 ## PRÓXIMO paso accionable
-1. ✔ RUSH VERIFICADO (tick 15:30 UTC: ids 3, 13, 14 con feed+historia, 0 errores,
-   0 duplicados). Solo seguimiento: alerta de cupo lleno hoy en la tarde y
-   chequeo de salud de ig_queue al retomar (query en HANDOFF.txt).
+1. Confirmar cadencia del rush inmediato post-deploy 15:45 UTC (~2/min;
+   background b8z1i05sp) y que la alerta de cupo llegue al llenarse (~16:10).
+   Probar el panel: botón 📸 Instagram en Telegram.
 2. **SEGURIDAD (heredado s13)**: rotar App Secret en panel Meta →
    `wrangler secret put META_APP_SECRET`.
 3. Decidir si re-publicar la Tundra (id 4): DB dice publicado pero el usuario

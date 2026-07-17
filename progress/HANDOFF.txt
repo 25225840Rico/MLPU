@@ -21,19 +21,24 @@ ESTADO ACTUAL (todo desplegado y pusheado):
   reapertura (post mas viejo de la ventana +24h) y retoma solo.
 - Cola al momento del corte: ~130 pendientes, 14+ publicados, 0 error.
 
-ULTIMO PASO COMPLETADO: RUSH VERIFICADO EN PRODUCCION (16/07 15:36 UTC): el
-tick de las 15:30 publico 3 productos (ids 3, 13, 14) con feed+historia
-completos, cero errores, cero duplicados, sin filas colgadas ni lock pegado.
-El id 3 (Matchbox Bronco, el que ayer fallo 3 veces) salio perfecto con el
-poll paciente. Cola: 130 pendientes / 14 publicados / 0 error. Cupo ~30/100.
+ULTIMO PASO COMPLETADO (parte 4, deploy 2ad74816, commit d49e373): RUSH
+INMEDIATO VERIFICADO — cron cada 1 minuto, 7 productos publicados en los 5 min
+posteriores al deploy (15:46-15:50 UTC, ~2/min, 0 errores). Ademas PANEL DE
+BOTONES: boton "IG/Instagram" en la botonera de Telegram abre panel inline
+(Rush YA / Goteo 90m / Pausar / Seguir / Ver cola / Cargar stock / Subir 3 /
+Promo / Off / Actualizar); los comandos /ig siguen operativos.
+Rush con guardas baratas por tick: horario 09-23 Chile -> COUNT pendientes ->
+siesta (rush_avisado.reabre) -> recien ahi consulta el cupo real de Meta
+(content_publishing_limit, 100/24h, historias cuentan, reserva 4).
 
-PROXIMO PASO EXACTO: seguimiento pasivo del rush (ya verificado):
-1) Hoy en la tarde, al llegar el cupo a ~100/100, debe llegar UNA alerta
-   "Cupo diario de Meta lleno (~HH:MM de reapertura)"; manana retoma solo.
-2) Chequeo rapido de salud cuando se retome la sesion:
+PROXIMO PASO EXACTO: seguimiento pasivo:
+1) Hoy ~16:10 UTC el cupo deberia llegar a ~100/100 -> debe llegar UNA alerta
+   "Cupo diario de Meta lleno (~HH:MM de reapertura)"; retoma solo (siesta).
+2) Chequeo de salud al retomar la sesion:
    cd worker && npx wrangler d1 execute mlpu-db --remote --command
    "SELECT estado, COUNT(*) FROM ig_queue GROUP BY estado"
-   -> pendientes bajando, sin 'publicando' con claimed_en viejo, sin 'error'.
+   -> pendientes bajando ~48/dia, sin 'publicando' viejas, sin 'error'.
+3) Confirmar con el usuario que el panel de botones le acomoda.
 Si algo fallo: revisar ultimo_error en ig_queue y logs con wrangler tail.
 
 PENDIENTES DEL USUARIO:

@@ -1,3 +1,18 @@
+SAVE — MLPU (2026-07-16, sesión 14 — parte 4, cierre)
+RUSH INMEDIATO + PANEL DE BOTONES EN PRODUCCIÓN (commit d49e373 pusheado,
+deploy 2ad74816, 57/57 tests). Cron del publisher CADA 1 MINUTO: en rush es
+subida masiva continua (~2 productos/min) hasta llenar el cupo real de Meta
+(100/24 h); cupo lleno → 1 aviso con hora de reapertura + siesta sin gastar
+Graph API; retoma solo. Control por BOTONES: botón "📸 Instagram" en la
+botonera abre el panel (Rush YA · Goteo 90m · Pausar · Seguir · Ver cola ·
+Cargar stock · Subir 3 ahora · Promo · Off · Actualizar). Comandos /ig siguen.
+Guardas: horario 09-23 Chile → COUNT pendientes → siesta → recién ahí quota.
+Lock TTL 3 min · recovery 'publicando' 10 min · claim atómico (sin duplicados).
+PRÓXIMO PASO AL RETOMAR: confirmar cadencia (~2/min tras deploy 15:45 UTC),
+alerta de cupo lleno (~33 ítems hoy) y probar el panel con el botón.
+PENDIENTE: rotar App Secret Meta (s13) · decidir re-publicar Tundra (id 4).
+Detalle: progress/CHECKPOINT.md · progress/log/2026-07-16.md
+
 SAVE — MLPU (2026-07-16, sesión 14 — parte 3)
 MODO RUSH IG EN PRODUCCIÓN (commit 1423030 pusheado, deploy d4c96a82, 56/56
 tests). RUSH ACTIVO: 3 productos por tick del cron (*/15, 09:00–23:00 Chile)
