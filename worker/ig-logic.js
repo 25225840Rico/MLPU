@@ -91,17 +91,10 @@ export function blurImageUrl(publicUrl, url, story = false) {
   return `${publicUrl}/ig/img?u=${encodeURIComponent(url)}${story ? '&s=1' : ''}`
 }
 
-// Compositor propio en modo pad (fondo blanco plano, mucho más barato que el
-// blur). Fallback de historias: CONSERVA el banner DISPONIBLE, que wsrv y la
-// URL original no llevan.
-export function padOwnImageUrl(publicUrl, url, story = false) {
-  return `${blurImageUrl(publicUrl, url, story)}&m=pad`
-}
-
-// URL del proxy wsrv.nl que rellena con blanco hasta la proporción exacta de IG
-// (feed 1:1, historia 9:16) sin recortar. q=95 porque el default (~80) degrada visible.
-// Queda como fallback del compositor blur.
-export function padImageUrl(url, story = false) {
-  return `https://wsrv.nl/?url=${encodeURIComponent(url)}` +
-    `&w=1080&h=${story ? 1920 : 1080}&fit=contain&cbg=white&output=jpg&q=95`
+// Compositor propio en modo lite (blur barato: upscale directo al lienzo, sin
+// crop). Fallback que CONSERVA el fondo blur y el banner — requisito del
+// negocio: las publicaciones llevan fondo blur SÍ O SÍ (2026-07-17), por eso
+// ya no existen los fallbacks wsrv/URL original (salían sin blur ni banner).
+export function liteImageUrl(publicUrl, url, story = false) {
+  return `${blurImageUrl(publicUrl, url, story)}&m=lite`
 }

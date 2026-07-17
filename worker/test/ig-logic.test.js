@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fmtCLP, buildCaption, pickBestWindows, isInWindow, windowKey, FALLBACK_WINDOWS, maxResPicture, padImageUrl, padOwnImageUrl } from '../ig-logic.js'
+import { fmtCLP, buildCaption, pickBestWindows, isInWindow, windowKey, FALLBACK_WINDOWS, maxResPicture, liteImageUrl } from '../ig-logic.js'
 
-test('padOwnImageUrl: compositor propio en modo pad (con s=1 en historias)', () => {
+test('liteImageUrl: compositor propio en modo lite (con s=1 en historias)', () => {
   assert.equal(
-    padOwnImageUrl('https://pub.test', 'https://http2.mlstatic.com/a-F.jpg', true),
-    'https://pub.test/ig/img?u=' + encodeURIComponent('https://http2.mlstatic.com/a-F.jpg') + '&s=1&m=pad')
-  assert.ok(!padOwnImageUrl('https://pub.test', 'https://x/y.jpg', false).includes('s=1'))
+    liteImageUrl('https://pub.test', 'https://http2.mlstatic.com/a-F.jpg', true),
+    'https://pub.test/ig/img?u=' + encodeURIComponent('https://http2.mlstatic.com/a-F.jpg') + '&s=1&m=lite')
+  assert.ok(!liteImageUrl('https://pub.test', 'https://x/y.jpg', false).includes('s=1'))
 })
 
 test('fmtCLP separa miles con punto', () => {
@@ -62,16 +62,6 @@ test('maxResPicture: deja intactas URLs que no calzan el patrón', () => {
     'https://http2.mlstatic.com/D_123-MLC456-F.webp')
   assert.equal(maxResPicture('https://otro.cdn.com/foto-O.jpg'), 'https://otro.cdn.com/foto-O.jpg')
   assert.equal(maxResPicture(null), null)
-})
-
-test('padImageUrl: feed 1080x1080 con contain, fondo blanco y q=95', () => {
-  const u = padImageUrl('https://http2.mlstatic.com/a b.jpg')
-  assert.ok(u.startsWith('https://wsrv.nl/?url=https%3A%2F%2Fhttp2.mlstatic.com%2Fa%20b.jpg'))
-  assert.ok(u.includes('&w=1080&h=1080&fit=contain&cbg=white&output=jpg&q=95'))
-})
-
-test('padImageUrl: historia 1080x1920', () => {
-  assert.ok(padImageUrl('https://x.com/f.jpg', true).includes('&w=1080&h=1920&fit=contain'))
 })
 
 test('blurImageUrl: arma la URL del compositor propio (feed e historia)', async () => {

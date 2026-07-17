@@ -58,25 +58,30 @@ export function composeBlur(bytes, story = false, bannerBytes = null) {
   return finishCanvas(canvas, src, bannerBytes)
 }
 
-// Variante barata: fondo blanco plano en vez del blur (sin gaussian ni upscale
-// gigante). La cadena de ig-api la usa como fallback del blur en historias,
-// para que el banner DISPONIBLE no se pierda cuando el blur falla.
-export function composePad(bytes, story = false, bannerBytes = null) {
+// Variante barata del blur (fallback): el fondo se difumina igual, pero el
+// upscale va DIRECTO al tamaño del lienzo (sin el intermedio "cover" más
+// grande ni crop). La distorsión de aspecto del fondo es invisible bajo el
+// blur. El fondo blur y el banner se conservan SIEMPRE (requisito del negocio).
+export function composeLite(bytes, story = false, bannerBytes = null) {
   const { W, H } = canvasSize(story)
-  const canvas = new PhotonImage(new Uint8Array(W * H * 4).fill(255), W, H)
-  return finishCanvas(canvas, PhotonImage.new_from_byteslice(bytes), bannerBytes)
+  const src = PhotonImage.new_from_byteslice(bytes)
+  const small = resize(src, Math.max(1, Math.round(W / 8)), Math.max(1, Math.round(H / 8)), SamplingFilter.Triangle)
+  gaussian_blur(small, 3)
+  const canvas = resize(small, W, H, SamplingFilter.Triangle)
+  small.free()
+  return finishCanvas(canvas, src, bannerBytes)
 }
 
-// GET /ig/img?u=<url mlstatic encodeada>[&s=1][&m=pad] — no es un proxy
+// GET /ig/img?u=<url mlstatic encodeada>[&s=1][&m=lite] — no es un proxy
 // abierto: solo acepta fotos del CDN de ML. En historias estampa el banner
-// DISPONIBLE. m=pad: fondo blanco plano (fallback barato del blur).
+// DISPONIBLE. m=lite: blur barato (fallback del compositor completo).
 export async function igImageProxy(request, env) {
   const url = new URL(request.url)
   let src
   try { src = new URL(url.searchParams.get('u') || '') } catch { return new Response('u inválida', { status: 400 }) }
   if (!/(^|\.)mlstatic\.com$/.test(src.hostname)) return new Response('solo imágenes de mlstatic.com', { status: 403 })
   const story = url.searchParams.get('s') === '1'
-  const pad   = url.searchParams.get('m') === 'pad'
+  const lite  = url.searchParams.get('m') === 'lite'
 
   const r = await fetch(src, { cf: { cacheTtl: 86400, cacheEverything: true } })
   if (!r.ok) return new Response(`no pude bajar la imagen (${r.status})`, { status: 502 })
@@ -88,7 +93,7 @@ export async function igImageProxy(request, env) {
     const b = await env.ASSETS.fetch(new Request(`${url.origin}/ig/disponible.png`))
     if (b.ok) bannerBytes = new Uint8Array(await b.arrayBuffer())
   }
-  const jpeg = pad ? composePad(bytes, story, bannerBytes) : composeBlur(bytes, story, bannerBytes)
+  const jpeg = lite ? composeLite(bytes, story, bannerBytes) : composeBlur(bytes, story, bannerBytes)
   return new Response(jpeg, {
     headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' },
   })

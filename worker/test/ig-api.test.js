@@ -83,31 +83,30 @@ test('igPublishImage story: el compositor recibe s=1', async () => {
   assert.ok(img.endsWith('&s=1'))
 })
 
-test('igPublishImage: cadena de fallback blur → wsrv → URL original', async () => {
+test('igPublishImage: fallback blur → blur lite (el fondo blur nunca se pierde)', async () => {
   let mediaCalls = 0
   const calls = stubFetch(url => {
     if (url.includes('/media_publish')) return okJson({ id: 'P1' })
     mediaCalls++
-    if (mediaCalls <= 2) return { ok: true, json: async () => ({ error: { message: 'Media download failed: bad image url' } }) }
+    if (mediaCalls <= 1) return { ok: true, json: async () => ({ error: { message: 'Media download failed: bad image url' } }) }
     return okJson({ id: 'C1' })
   })
   const env = await makeEnv()
   const id = await igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp', caption: 'x' })
   assert.equal(id, 'P1')
-  const img1 = new URLSearchParams(calls[0].opts.body).get('image_url')
-  const img2 = new URLSearchParams(calls[1].opts.body).get('image_url')
-  const img3 = new URLSearchParams(calls[2].opts.body).get('image_url')
-  assert.ok(img1.startsWith('https://pub.test/ig/img?u='))
-  assert.ok(img2.startsWith('https://wsrv.nl/?url='))
-  assert.equal(img3, 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp')
+  const imgs = calls.filter(c => c.url.endsWith('/media'))
+    .map(c => new URLSearchParams(c.opts.body).get('image_url'))
+  assert.equal(imgs.length, 2)
+  assert.ok(imgs[0].startsWith('https://pub.test/ig/img?u=') && !imgs[0].includes('m=lite'))
+  assert.ok(imgs[1].startsWith('https://pub.test/ig/img?u=') && imgs[1].includes('m=lite'))
 })
 
-test('igPublishImage story: cadena blur → pad propio (banner) → wsrv → original', async () => {
+test('igPublishImage story: el lite conserva s=1 (banner) y NO hay wsrv/original', async () => {
   let mediaCalls = 0
   const calls = stubFetch(url => {
     if (url.includes('/media_publish')) return okJson({ id: 'P1' })
     mediaCalls++
-    if (mediaCalls <= 3) return { ok: true, json: async () => ({ error: { message: 'Media download failed: bad image url' } }) }
+    if (mediaCalls <= 1) return { ok: true, json: async () => ({ error: { message: 'Media download failed: bad image url' } }) }
     return okJson({ id: 'C1' })
   })
   const env = await makeEnv()
@@ -115,11 +114,27 @@ test('igPublishImage story: cadena blur → pad propio (banner) → wsrv → ori
   assert.equal(id, 'P1')
   const imgs = calls.filter(c => c.url.endsWith('/media'))
     .map(c => new URLSearchParams(c.opts.body).get('image_url'))
-  assert.equal(imgs.length, 4)
-  assert.ok(imgs[0].startsWith('https://pub.test/ig/img?u=') && !imgs[0].includes('m=pad'))
-  assert.ok(imgs[1].startsWith('https://pub.test/ig/img?u=') && imgs[1].includes('s=1') && imgs[1].includes('m=pad'))
-  assert.ok(imgs[2].startsWith('https://wsrv.nl/?url='))
-  assert.equal(imgs[3], 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp')
+  assert.equal(imgs.length, 2)
+  assert.ok(imgs[1].includes('s=1') && imgs[1].includes('m=lite'))
+})
+
+test('igPublishImage: si blur y lite fallan, LANZA (nunca publica sin blur)', async () => {
+  let mediaCalls = 0
+  const calls = stubFetch(url => {
+    if (url.includes('/media_publish')) return okJson({ id: 'P1' })
+    mediaCalls++
+    return { ok: true, json: async () => ({ error: { message: 'Media download failed: bad image url' } }) }
+  })
+  const env = await makeEnv()
+  await assert.rejects(
+    () => igPublishImage(env, { imageUrl: 'https://http2.mlstatic.com/D_1-MLC2_072026-O.webp', story: true }),
+    /Media download failed/
+  )
+  // Solo los 2 eslabones propios: ninguna URL de wsrv ni la original.
+  assert.equal(mediaCalls, 2)
+  for (const c of calls.filter(c => c.url.endsWith('/media'))) {
+    assert.ok(new URLSearchParams(c.opts.body).get('image_url').startsWith('https://pub.test/ig/img?u='))
+  }
 })
 
 test('igPublishImage: si el error es rate-limit/token, NO reintenta y lanza', async () => {
