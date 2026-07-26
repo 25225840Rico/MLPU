@@ -82,6 +82,19 @@ en 3 "a ojo": no era una decisión de negocio, era miedo al límite.
   Worker se comporta exactamente como antes. Por eso el deploy no podía romper
   nada aunque L10 viajara dentro.
 
+### 5.1 Git y CI
+
+- Commit `a0bff32` (todo lo anterior) + `79fd135` (arreglo de la CI), pusheados
+  a `main`.
+- La primera corrida de la CI **falló**, y bien: el script de tests tenía el
+  patrón entre comillas (`"worker/test/*.test.js"`), así que en Linux bash no lo
+  expandía y Node 20 tampoco (los globs en `--test` llegaron en v22) →
+  `Could not find worker/test/*.test.js`. Sin comillas lo expande bash en Linux
+  y Node en Windows. Runner subido a Node 22 de paso.
+- Corrida siguiente **verde**: `test` → `build` → `deploy`.
+- SPA publicado y verificado: `https://25225840rico.github.io/MLPU/` responde
+  200 y sirve `assets/index-Bm5LMGp7.js`, el mismo hash del build local.
+
 ## 6. Lo que queda EN MANOS DE ARON (no lo puedo hacer yo)
 
 Activar la seguridad exige elegir valores secretos y tocar el teléfono:
