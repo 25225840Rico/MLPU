@@ -45,6 +45,15 @@ crons = ["* * * * *", "0 10 * * *"]
 #   wrangler secret put ML_CLIENT_SECRET
 #   wrangler secret put TELEGRAM_BOT_TOKEN
 #   wrangler secret put TELEGRAM_CHAT_ID
+#   wrangler secret put META_APP_ID
+#   wrangler secret put META_APP_SECRET
+# Opcionales de seguridad (mientras no existan, los controles quedan en no-op y
+# el Worker se comporta exactamente como antes; ver README → Seguridad):
+#   wrangler secret put MLPU_KEY                 -> exige X-MLPU-Key en /ml/* y /tg/admin
+#   wrangler secret put TELEGRAM_WEBHOOK_SECRET  -> valida el webhook del bot
+# OJO: tras poner TELEGRAM_WEBHOOK_SECRET hay que desplegar y RE-REGISTRAR el
+# webhook (GET /tg/admin?action=set); si no, Telegram sigue mandando updates sin
+# el token y el bot deja de responder.
 
 # Assets estáticos (imagen de la historia promocional /ig promo).
 # Con `main` presente, los paths que matchean un asset se sirven directo;

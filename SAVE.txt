@@ -1,3 +1,109 @@
+SAVE — MLPU (2026-07-26, sesión 19 — AUDITORÍA + REFINAMIENTO + DEPLOY)
+PEDIDO: "refinar, debuguear y optimizar SIN ROMPER NADA", con foco en que la
+publicación a Instagram sea más rápida, más cantidad y más eficiente; y al
+cierre "haz todo lo pendiente" (= autorizó índices en remoto + deploy).
+HECHO Y VERIFICADO EN PRODUCCIÓN:
+- Worker DESPLEGADO: version 9411faca-195b-4020-9e39-dc788a6726ef.
+  Post-deploy en vivo: /ml/auth/status active:true · /tg/admin?action=info con
+  webhook OK y 0 pendientes · cron "* * * * *" corriendo con outcome Ok.
+- ÍNDICES aplicados a la D1 remota (mlpu-db, 3 queries): claimNext pasó de
+  escanear 567 filas a COVERING INDEX ix_ig_queue_claim (verificado con
+  EXPLAIN QUERY PLAN). OJO: la base se llama mlpu-db, NO mlpu.
+- Rendimiento IG: presupuesto de subrequests del plan Free, Graph API unificada,
+  fallback de fuente 'drive' reparado, runIgPublisher blindado en waitUntil,
+  filas colgadas en 'publicando' con claimed_en NULL, race de historia
+  duplicada, /ig vaciar respetando el foco de fuente.
+- L6: escape HTML en ~25 mensajes de Telegram (un "&" en un título tumbaba el
+  mensaje entero con 400 y el aviso se perdía). esc() vive ahora en ig-logic.js.
+- L7: la alerta de VENTA ya no se pierde si Telegram falla (antes se marcaba
+  alerted=true antes de enviar). 5 tests nuevos.
+- L8 SPA: ganancia real en el historial, fotos sin reescalar, borradores que ya
+  no se pierden en silencio por cuota, atributos faltantes con nombre.
+- L10 SEGURIDAD desplegada en modo INERTE (los dos secrets son opcionales y
+  mientras no existan todo se comporta igual que antes).
+- CI: el workflow de Pages corre npm test + npm run test:spa antes de construir.
+- 116/116 tests · 28 comprobaciones del SPA · vite build OK.
+PRÓXIMO (SOLO puede hacerlo ARON, activa la seguridad):
+  1) npx wrangler secret put MLPU_KEY   (desde worker/) y pegar EL MISMO valor
+     en el SPA: Ajustes → «Llave del Worker». Si se pone el secret y no se pega
+     la llave, el proxy devuelve 401 y la app deja de publicar.
+  2) npx wrangler secret put TELEGRAM_WEBHOOK_SECRET → npx wrangler deploy →
+     RE-REGISTRAR el webhook: GET /tg/admin?action=set  (si no, el bot queda mudo)
+COLA AL CIERRE: drive 294 publicado / 118 pendiente · ml 90 publicado / 55
+pendiente. Sin publicar desde 14:11 UTC por CUPO DE META LLENO (reabre
+2026-07-27T13:29:21Z): es la siesta esperada, no una falla.
+Detalle: progress/log/2026-07-26-ig-rendimiento.md · progress/CHECKPOINT.md
+
+SAVE — MLPU (2026-07-20, sesión 18 — INVENTARIO DRIVE listo para publicar)
+PEDIDO: publicar el inventario propio (412 autos a escala fotografiados con
+CamToDrive, fotos en Drive "BASE DE DATOS HW") en Instagram, con caption =
+ficha del auto + DISPONIBLE + "precio: por DM" (sin precio numérico).
+HECHO (código desplegado + migración aplicada; el disparo del user ya ocurrió,
+ver la corrección al pie de este bloque):
+- Nueva fuente 'drive' en ig_queue (cols fuente/image_url/caption; migrate-drive.sql
+  aplicado a mlpu-db remoto). publicarFila publica filas drive con foto del proxy
+  y caption propio, SIN consultar ML. Cadena blur+banner/historia DISPONIBLE
+  intacta (Cloudinary l_fetch toma la URL del proxy). ML sin cambios (53 tests ✓).
+- Proxy de fotos de Drive: GET /img/drive/<fileId> (index.js) → thumbnail de Drive
+  (JPEG público, resuelve HEIC). Verificado en vivo: 200 image/jpeg 1600x2133.
+- FOCO DE FUENTE (aísla ML de Drive): config 'foco_fuente'. getFoco/setFoco en
+  ig-queue.js; claimNext + guardias de rush/aviso filtran por fuente. Comando
+  /ig solo drive|ml|off + BOTÓN en el panel que cicla AMBAS→DRIVE→ML→AMBAS
+  (callback igm:foco). Panel muestra pendientes por fuente (Drive/ML). Con
+  foco='drive', rush/goteo/ventanas/ahora publican SOLO drive; los 55 ML quedan
+  intactos. 66 tests ✓ (2 nuevos: fuente drive + foco drive).
+- Worker DESPLEGADO (version 8cbe07fe). wrangler logueado (aronricocl@gmail.com).
+- seed-hw.sql generado (412 INSERT, scripts/gen-seed-hw.py lee INVENTARIO_HW.xlsx).
+- APLICADO Y FUNCIONAL (2026-07-20 ~22:45 Chile): foco_fuente='drive' + seed
+  aplicado (412 drive pendiente) + modo_auto='rush' ON. ml pendiente=55 INTACTO.
+  Pre-check Cloudinary OK (feed 245KB / historia 383KB compuestas desde el proxy).
+  El cron publica ~2/min 09:00-23:00; a las 22:45 quedaban ~15 min de ventana,
+  sigue a las 09:00. Cupo Meta 100/24h COMPARTIDO (los 90 ML de hoy ya gastaron).
+- PARA ALTERNAR: botón del panel (AMBAS→DRIVE→ML) o /ig solo drive|ml|off.
+- APAGAR rush: /ig rush off. Los 412 quedan encolados igual.
+[CORREGIDO 2026-07-26] Este "PRÓXIMO" YA SE EJECUTÓ: el seed está aplicado en
+  remoto y la cola avanzó sola. Estado verificado hoy contra la D1 remota:
+  drive 294 publicado / 118 pendiente · ml 90 publicado / 55 pendiente.
+  Re-ejecutar seed-hw.sql no rompe nada (INSERT OR IGNORE) pero no hace falta.
+OJO: se encolan en la MISMA cuenta/cola que la operación HW; comparten cupo.
+Detalle técnico completo en el chat de esta sesión.
+
+SAVE — MLPU (2026-07-19, sesión 17 CIERRE — PEDIDO COMPLETO ✓)
+370Z: los 3 posts BORRADOS de IG vía Graph API (success:true × 3, verificado
+"no disponible"). Causa del (#10) previo: instagram_manage_contents NO estaba
+AGREGADO a la app. Fix: panel topwheelsapp → Casos de uso → API de Instagram
+→ Permisos → "+ Agregar" instagram_manage_contents → OAuth manual con ese
+scope sobre topwheels.cl → DELETE ejecutado in-browser (token nunca salió).
+REBAJA: -35% ya aplicado antes en ig_queue (142 filas, solo IG, ML intacto;
+backup progress/log/2026-07-19-ig-backup-precola.json).
+PENDIENTE OPCIONAL: token LARGO con el permiso nuevo sembrado en D1 para que
+/ig borrarhistorias del bot funcione (la app ya ofrece el permiso).
+PENDIENTE DECISIÓN: 142 posts publicados muestran precio VIEJO en el caption
+(API no edita captions) → borrar+republicar vía rush (~3 días) o dejar.
+Detalle: progress/log/2026-07-19.md
+
+SAVE — MLPU (2026-07-19, sesión 17 — rebaja IG -35% + retiro 370Z)
+PEDIDO: eliminar 370Z de IG + bajar 35% los precios SOLO EN INSTAGRAM.
+HECHO (todo en D1 remoto, sin deploy; backup previo COMPLETO en
+progress/log/2026-07-19-ig-backup-precola.json — única vía de reversión):
+1) -35% aplicado a 142 filas de ig_queue (todas menos los 3 370Z):
+   precio*0.65 truncado a DECENA → rango $3.240–$43.540 (ej 23990→15590).
+   MercadoLibre INTACTO (la rebaja es solo IG).
+2) 370Z son TRES (ids 19 rojo, 35 amarillo, 72 azul, $23.990): filas
+   blindadas (media ids NULL + nota) → ningún flujo los re-publica.
+3) DELETE de sus 3 posts del feed FALLÓ: (#10) permisos — el token de Meta
+   NO tiene instagram_manage_contents (confirmado /me/permissions). Los 3
+   posts tienen 0 likes/0 comentarios; media ids en el backup.
+BLOQUEO DURO: la Graph API NO edita captions ya publicados → los 142 posts
+del feed siguen mostrando precio VIEJO; solo lo nuevo sale con -35%.
+PRÓXIMO PASO AL RETOMAR: (a) usuario genera token con
+instagram_manage_contents (Graph API Explorer) → re-sembrar meta_token →
+borrar los 3 media del backup; o archivar por navegador. (b) decidir los
+142 captions viejos: borrar+republicar vía rush (~3 días de cupo) o manual.
+OJO /ig stock: ítems nuevos encolan a precio ML SIN -35%.
+Rush ACTIVO hoy; siesta por cupo hasta ~22:02 UTC.
+Detalle: progress/log/2026-07-19.md · progress/CHECKPOINT.md
+
 SAVE — MLPU (2026-07-17, sesión 16 — fix "Only photo or video can be accepted")
 CAUSA RAÍZ: el compositor blur (photon) excede el CPU del plan FREE de
 Workers (10 ms) bajo carga → Cloudflare corta con error 1102 (503 texto) →

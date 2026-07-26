@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test \"worker/test/*.test.js\""
+    "test": "node --test \"worker/test/*.test.js\"",
+    "test:spa": "node scripts/verify-spa.mjs",
+    "test:all": "npm test && npm run test:spa"
   },
   "dependencies": {
     "@cf-wasm/photon": "^0.3.7",

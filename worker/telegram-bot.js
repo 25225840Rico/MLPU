@@ -22,9 +22,9 @@ import {
   analyzeProduct, clusterPhotos, discoverCategories, getRequiredAttrs, fillAttributesWithAI,
   getMarketPrices, uploadPicture, createListing, cleanTitle, roundTo990, estimateProfit,
 } from './publisher.js'
-import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto, setRush, RUSH_RESERVA, requeueStories, borrarHistorias } from './ig-queue.js'
+import { enqueueIg, enqueueStock, listPendientes, quitarDeCola, vaciarCola, getVentanas, runIgPublisher, isPausado, setPausado, getAuto, setAuto, setRush, RUSH_RESERVA, requeueStories, borrarHistorias, getFoco, setFoco, reintentarErrores, getHistorias, setHistorias } from './ig-queue.js'
 import { fetchPublishingQuota } from './ig-api.js'
-import { fmtCLP } from './ig-logic.js'
+import { fmtCLP, esc } from './ig-logic.js'
 import { igPublishImage } from './ig-api.js'
 
 const TG_API = 'https://api.telegram.org'
@@ -163,10 +163,6 @@ async function approveChat(env, adminChat, targetId, ok) {
   }
   await tgSend(env, targetId, '❌ El administrador rechazó tu solicitud.')
   return tgSend(env, adminChat, `Chat <code>${targetId}</code> rechazado.`)
-}
-
-function esc(t) {
-  return String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 async function handleTextCommand(env, msg, ctx) {
@@ -335,10 +331,10 @@ async function sendStart(env, chatId) {
 // Lista de pendientes para elegir a qué orden asignar el tracking leído.
 async function sendPendingChoice(env, chatId, pending, data) {
   const slice = pending.slice(0, 10)
-  const lines = slice.map((o, i) => `${i + 1}. <code>${o.order_id}</code> — ${o.buyer_name} — ${o.product}`)
+  const lines = slice.map((o, i) => `${i + 1}. <code>${o.order_id}</code> — ${esc(o.buyer_name)} — ${esc(o.product)}`)
   await tgSend(env, chatId,
-    `📦 Tracking: <code>${data.tracking_number}</code>\n` +
-    `👤 Destinatario leído: ${data.recipient_name || '—'}\n\n` +
+    `📦 Tracking: <code>${esc(data.tracking_number)}</code>\n` +
+    `👤 Destinatario leído: ${esc(data.recipient_name) || '—'}\n\n` +
     `No encontré una coincidencia clara. Elegí la orden:\n${lines.join('\n')}`,
     { reply_markup: { inline_keyboard: slice.map(o => [{ text: `🏷 ${o.order_id} · ${o.buyer_name}`, callback_data: `asg:${o.order_id}` }]) } })
 }
@@ -372,24 +368,49 @@ const IG_PANEL_KB = { inline_keyboard: [
   [{ text: '📋 Ver cola', callback_data: 'igm:cola' }, { text: '📦 Cargar stock', callback_data: 'igm:stock' }],
   [{ text: '🚀 Subir 3 ahora', callback_data: 'igm:ahora' }, { text: '📢 Historia promo', callback_data: 'igm:promo' }],
   [{ text: '🔁 Rehistorias', callback_data: 'igm:rehist' }, { text: '🧹 Borrar historias', callback_data: 'igm:delhist' }],
+  [{ text: '🔄 Reintentar errores', callback_data: 'igm:reintentar' }, { text: '📖 Historias on/off', callback_data: 'igm:historias' }],
   [{ text: '⛔ Modo off', callback_data: 'igm:off' }, { text: '🔄 Actualizar', callback_data: 'igm:panel' }],
 ] }
 
+// Switch de fuente (un botón que cicla AMBAS → DRIVE → ML → AMBAS). La etiqueta
+// dice qué se publica hoy y a qué cambia al tocarlo.
+const FOCO_BTN_LABEL = { drive: '🎯 Publica: DRIVE ▸ tocá→ML', ml: '🎯 Publica: ML ▸ tocá→AMBAS', null: '🎯 Publica: AMBAS ▸ tocá→Drive' }
+const FOCO_NEXT = { null: 'drive', drive: 'ml', ml: null } // ciclo del switch
+const igPanelKb = foco => ({ inline_keyboard: [
+  [{ text: FOCO_BTN_LABEL[foco ?? 'null'], callback_data: 'igm:foco' }],
+  ...IG_PANEL_KB.inline_keyboard,
+] })
+
 export async function sendIgPanel(env, chatId) {
-  const [auto, pausado, counts] = await Promise.all([
-    getAuto(env), isPausado(env),
-    env.DB.prepare("SELECT estado, COUNT(*) n FROM ig_queue WHERE estado IN ('pendiente','publicado') GROUP BY estado").all(),
+  const [auto, pausado, foco, historias, counts, porFuente] = await Promise.all([
+    getAuto(env), isPausado(env), getFoco(env), getHistorias(env),
+    // 'publicando' y 'error' se cuentan desde 2026-07-26: el panel solo miraba
+    // 'pendiente' y 'publicado', así que las filas EN VUELO (hasta RUSH_POR_TICK
+    // por tick) desaparecían de la cuenta —el total bajaba solo y sin explicación—
+    // y una fila colgada o en error era invisible hasta que alguien pedía /ig cola.
+    env.DB.prepare("SELECT estado, COUNT(*) n FROM ig_queue WHERE estado IN ('pendiente','publicado','publicando','error') GROUP BY estado").all(),
+    env.DB.prepare("SELECT COALESCE(fuente,'ml') f, COUNT(*) n FROM ig_queue WHERE estado='pendiente' GROUP BY 1").all(),
   ])
-  const n = Object.fromEntries((counts.results || []).map(r => [r.estado, r.n]))
+  const n  = Object.fromEntries((counts.results || []).map(r => [r.estado, r.n]))
+  const pf = Object.fromEntries((porFuente.results || []).map(r => [r.f, r.n]))
   const modo = pausado ? '⏸ PAUSADO'
     : auto?.rush ? '🔥 RUSH (subida masiva hasta llenar el cupo diario)'
     : auto?.intervalo_min ? `🚿 Goteo: 1 cada ~${auto.intervalo_min} min`
     : '🕐 Por ventanas (clásico)'
+  const focoTxt = foco === 'drive' ? '🚗 Solo DRIVE (inventario propio)'
+    : foco === 'ml' ? '🛒 Solo MERCADOLIBRE'
+    : '🔀 Ambas fuentes'
+  const enVuelo = n.publicando ?? 0
+  const enError = n.error ?? 0
   return tgSend(env, chatId,
     `📸 <b>Panel de Instagram</b> — @topwheels.cl\n\n` +
-    `Modo: <b>${modo}</b>\nCola: <b>${n.pendiente ?? 0} pendientes</b> · ${n.publicado ?? 0} publicados\n` +
+    `Modo: <b>${modo}</b>\nPublicando: <b>${focoTxt}</b>\n` +
+    `Historias: <b>${historias ? '✅ SÍ (feed + historia)' : '🚫 NO (solo feed — el cupo diario rinde el doble)'}</b>\n` +
+    `Pendientes → 🚗 Drive: <b>${pf.drive ?? 0}</b> · 🛒 ML: <b>${pf.ml ?? 0}</b> · ${n.publicado ?? 0} publicados\n` +
+    (enVuelo ? `⚙️ Subiendo ahora: <b>${enVuelo}</b>\n` : '') +
+    (enError ? `⚠️ En error (se reintentan con 🔄 Reintentar): <b>${enError}</b>\n` : '') +
     `Horario de publicación: 09:00–23:00 (Chile)`,
-    { reply_markup: IG_PANEL_KB })
+    { reply_markup: igPanelKb(foco) })
 }
 
 async function handleIgCommand(env, chatId, args, ctx) {
@@ -402,8 +423,10 @@ async function handleIgCommand(env, chatId, args, ctx) {
     const rows = await listPendientes(env)
     const kb = { inline_keyboard: [[{ text: '🎛 Panel', callback_data: 'igm:panel' }]] }
     if (!rows.length) return tgSend(env, chatId, `${pausada}📭 La cola de Instagram está vacía. Cargar inventario: 📦 Cargar stock`, { reply_markup: kb })
-    const lines = rows.map((r, i) =>
-      `${i + 1}. <code>${r.id}</code> ${esc(r.titulo)} — ${fmtCLP(r.precio)}${r.intentos ? ` (${r.intentos} intento/s fallido/s)` : ''}`)
+    const lines = rows.map((r, i) => {
+      const precio = r.fuente === 'drive' ? '🚗 por DM' : fmtCLP(r.precio)
+      return `${i + 1}. <code>${r.id}</code> ${esc(r.titulo)} — ${precio}${r.intentos ? ` (${r.intentos} intento/s fallido/s)` : ''}`
+    })
     return tgSend(env, chatId, `${pausada}📸 <b>Cola de Instagram (${rows.length})</b>\n\n${lines.join('\n')}\n\nQuitar uno: /ig quitar &lt;id&gt;`, { reply_markup: kb })
   }
   if (sub === 'stock') {
@@ -422,7 +445,8 @@ async function handleIgCommand(env, chatId, args, ctx) {
     const job = (async () => {
       try {
         const r = await runIgPublisher(env, { force: true, notify, max })
-        if (r.enCurso) return tgSend(env, chatId, '⏳ Ya hay una publicación en curso; no lancé otra. Si no llegan avisos, el candado se libera solo en ~3 min y podés reintentar.')
+        // ~15 min = LOCK_TTL_MS de ig-queue.js (subió de 3 con el fix #11).
+        if (r.enCurso) return tgSend(env, chatId, '⏳ Ya hay una publicación en curso; no lancé otra. Si no llegan avisos, el candado se libera solo en ~15 min y podés reintentar.')
         if (r.pausado) return tgSend(env, chatId, `⏸ La cola está pausada${r.publicados ? ` (alcancé a publicar ${r.publicados})` : '; no publiqué nada'}. Reanudar: /ig seguir`)
         return tgSend(env, chatId, r.publicados ? `✅ Listo: ${r.publicados} producto(s) publicados en IG.` : 'No había nada publicable en la cola.')
       } catch (e) { return tgSend(env, chatId, `❌ IG falló: ${esc(e.message)}`) }
@@ -442,6 +466,22 @@ async function handleIgCommand(env, chatId, args, ctx) {
       ? `🗑 Cola vaciada: ${n} publicación(es) pendiente(s) canceladas. Re-encolar el inventario: /ig stock`
       : 'La cola ya estaba vacía.')
   }
+  if (sub === 'historias') {
+    if (rest[0] === 'on' || rest[0] === 'off') {
+      const on = rest[0] === 'on'
+      await setHistorias(env, on)
+      return tgSend(env, chatId, on
+        ? '📖 Historias ENCENDIDAS: cada producto sale como feed + historia (≈48 productos/día con el cupo de Meta).'
+        : '📖 Historias APAGADAS: solo feed. El cupo diario de Meta rinde el doble (≈96 productos/día) y cada tanda sube el doble de productos. Volver: /ig historias on')
+    }
+    return tgSend(env, chatId, `📖 Historias: <b>${await getHistorias(env) ? 'ENCENDIDAS' : 'APAGADAS'}</b>. Cambiar: /ig historias on|off`)
+  }
+  if (sub === 'reintentar') {
+    const n = await reintentarErrores(env, await getFoco(env))
+    return tgSend(env, chatId, n
+      ? `🔄 ${n} publicación(es) en error vuelven a la cola. Salen en las próximas corridas (o 🚀 Subir 3 ahora).`
+      : 'No hay publicaciones en error para reintentar.')
+  }
   if (sub === 'seguir') {
     await setPausado(env, false)
     return tgSend(env, chatId, '▶️ Publicación en Instagram reanudada: la cola sigue en las próximas ventanas.')
@@ -452,11 +492,24 @@ async function handleIgCommand(env, chatId, args, ctx) {
       return tgSend(env, chatId, '🕐 Ventanas en modo automático (insights de IG, fallback 12:30/20:00).')
     }
     if (rest.length) {
-      const horas = rest.filter(h => /^\d{1,2}:\d{2}$/.test(h))
-      if (!horas.length) return tgSend(env, chatId, 'Formato: /ig horas 12:30 20:00 (o "/ig horas auto")')
+      // La regex vieja aceptaba "25:99": la ventana quedaba guardada pero
+      // windowKey() no la matcheaba nunca y la cola dejaba de publicar sin
+      // decir por qué. Se valida el rango real del reloj.
+      const horas = rest.filter(h => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(h)
+        return m && +m[1] <= 23 && +m[2] <= 59
+      })
+      if (!horas.length) return tgSend(env, chatId, 'Formato: /ig horas 12:30 20:00 (o "/ig horas auto"). Hora válida: 00:00–23:59.')
       await env.DB.prepare('REPLACE INTO ig_config (clave, valor) VALUES (?, ?)')
         .bind('ventanas_manual', JSON.stringify({ horas })).run()
-      return tgSend(env, chatId, `🕐 Ventanas manuales fijadas: ${horas.join(', ')} (hora de Chile). Volver a automático: /ig horas auto`)
+      // Lo descartado se dice en voz alta (antes desaparecía sin más) y también
+      // lo que cae fuera del horario permitido: guardarlo no lo hace publicar.
+      const ignoradas = rest.filter(h => !horas.includes(h))
+      const fuera = horas.filter(h => { const hh = +h.split(':')[0]; return hh < 9 || hh >= 23 })
+      return tgSend(env, chatId, `🕐 Ventanas manuales fijadas: ${esc(horas.join(', '))} (hora de Chile).` +
+        (ignoradas.length ? `\n⚠️ Ignoradas por formato inválido: ${esc(ignoradas.join(', '))}` : '') +
+        (fuera.length ? `\n⚠️ Fuera del horario 09:00–23:00, no van a publicar: ${esc(fuera.join(', '))}` : '') +
+        `\nVolver a automático: /ig horas auto`)
     }
     const v = await getVentanas(env)
     return tgSend(env, chatId, `🕐 Ventanas vigentes: <b>${v.horas.join(', ')}</b> (origen: ${v.origen}).\nCambiar: /ig horas 12:30 20:00 · Automático: /ig horas auto`)
@@ -480,23 +533,48 @@ async function handleIgCommand(env, chatId, args, ctx) {
       ? `🚿 Goteo automático ACTIVO: 1 producto cada ~${a.intervalo_min} min (09:00–23:00 Chile). Apagar: /ig auto off`
       : '🚿 Goteo automático apagado (rige el modo por ventanas). Activar: /ig auto 30 · Rush: /ig rush')
   }
+  if (sub === 'solo') {
+    const arg = (rest[0] || '').toLowerCase()
+    if (['off', 'ambas', 'ambos', 'todo'].includes(arg)) {
+      await setFoco(env, null)
+      return tgSend(env, chatId, '🔀 Foco APAGADO: el publisher vuelve a mezclar 🚗 Drive + 🛒 ML (por prioridad/id).')
+    }
+    if (arg === 'drive' || arg === 'ml') {
+      await setFoco(env, arg)
+      const q = arg === 'drive' ? '🚗 SOLO el inventario propio de Drive' : '🛒 SOLO MercadoLibre'
+      return tgSend(env, chatId, `🎯 Foco fijado: rush/goteo/ventanas/“subir ahora” publican <b>${q}</b>. La otra fuente queda intacta.\nQuitar: /ig solo off`)
+    }
+    const cur = await getFoco(env)
+    return tgSend(env, chatId, `Uso: <code>/ig solo drive | ml | off</code>\nAhora mismo: <b>${cur ? cur.toUpperCase() : 'AMBAS'}</b>`)
+  }
   if (sub === 'rush') {
     if (rest[0] === 'off') {
       await setAuto(env, 0)
       return tgSend(env, chatId, '🔥 Rush APAGADO. Vuelve el modo por ventanas. Goteo suave: /ig auto 90')
     }
     await setRush(env)
+    const focoR = await getFoco(env)
+    const focoRush = focoR ? `\n🎯 Rush enfocado en <b>${focoR === 'drive' ? '🚗 DRIVE' : '🛒 ML'}</b> (cambiar: botón del panel o /ig solo …).` : '\n🔀 Rush de <b>ambas</b> fuentes (enfocar: /ig solo drive).'
+    // El costo por producto depende de si salen historias (2 unidades del cupo)
+    // o solo feed (1). El texto tiene que decir el número real, no uno fijo.
+    const conHist = await getHistorias(env)
+    const porItem = conHist ? 2 : 1
     let cupoTxt = ''
     try {
       const q = await fetchPublishingQuota(env)
-      const items = Math.max(0, Math.floor((q.total - q.usados - RUSH_RESERVA) / 2))
-      cupoTxt = `\nCupo de Meta ahora: ${q.usados}/${q.total} usados en 24 h → puedo subir ~${items} producto(s) más hoy (feed+historia = 2 c/u).`
+      const items = Math.max(0, Math.floor((q.total - q.usados - RUSH_RESERVA) / porItem))
+      cupoTxt = `\nCupo de Meta ahora: ${q.usados}/${q.total} usados en 24 h → puedo subir ~${items} producto(s) más hoy ` +
+        (conHist ? '(feed+historia = 2 c/u; con /ig historias off rinde el doble).' : '(solo feed = 1 c/u).')
     } catch { /* el estado del cupo es informativo; el rush igual queda activo */ }
     return tgSend(env, chatId,
-      `🔥 Modo RUSH activado: subida masiva YA (~2 productos por minuto, 09:00–23:00 Chile) hasta llenar el cupo diario de Meta; ` +
-      `cuando se llene te aviso a qué hora se reabre y sigo solo al día siguiente.${cupoTxt}\nApagar: /ig rush off · Goteo suave: /ig auto 90`)
+      `🔥 Modo RUSH activado: subida masiva YA (~${porItem === 1 ? 12 : 6} productos por minuto, 09:00–23:00 Chile) hasta llenar el cupo diario de Meta; ` +
+      `cuando se llene te aviso a qué hora se reabre y sigo solo al día siguiente.${focoRush}${cupoTxt}\nApagar: /ig rush off · Goteo suave: /ig auto 90`)
   }
   if (sub === 'rehistorias') {
+    // Con las historias apagadas esto re-encolaría filas que el publisher marca
+    // como publicadas sin subir nada: se bloquea antes de tocar la cola.
+    if (!(await getHistorias(env))) return tgSend(env, chatId,
+      '🚫 Las historias están apagadas: re-encolarlas no publicaría nada. Encendelas con /ig historias on y volvé a intentar.')
     await tgSend(env, chatId, '⏳ Midiendo interacciones del feed y re-encolando historias…')
     const job = (async () => {
       try {
@@ -539,15 +617,15 @@ async function handleIgCommand(env, chatId, args, ctx) {
       ]] },
     })
   }
-  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar <id> · /ig vaciar · /ig rush [off] · /ig auto [min|off] · /ig ahora [n] · /ig rehistorias · /ig borrarhistorias · /ig parar · /ig seguir · /ig horas · /ig promo')
+  return tgSend(env, chatId, 'Comandos: /ig stock · /ig cola · /ig quitar &lt;id&gt; · /ig vaciar · /ig reintentar · /ig rush [off] · /ig auto [min|off] · /ig ahora [n] · /ig historias [on|off] · /ig rehistorias · /ig borrarhistorias · /ig parar · /ig seguir · /ig horas · /ig promo')
 }
 
 async function sendOrdersList(env, chatId) {
   const orders = await listOrders(env, 10)
   if (!orders.length) return tgSend(env, chatId, 'No hay órdenes registradas todavía.', { reply_markup: MAIN_KB })
   const lines = orders.map(o =>
-    `• <code>${o.order_id}</code> — ${statusEs(o.status)}\n   ${o.buyer_name} · ${o.product}` +
-    (o.tracking_number ? `\n   🔖 ${o.tracking_number}` : ''))
+    `• <code>${o.order_id}</code> — ${statusEs(o.status)}\n   ${esc(o.buyer_name)} · ${esc(o.product)}` +
+    (o.tracking_number ? `\n   🔖 ${esc(o.tracking_number)}` : ''))
   await tgSend(env, chatId, `🧾 <b>Últimas ${orders.length} órdenes</b>\n\n${lines.join('\n')}`, {
     reply_markup: { inline_keyboard: orders.map(o => [{ text: `🔎 ${o.order_id} · ${o.buyer_name}`, callback_data: `ver:${o.order_id}` }]) },
   })
@@ -557,7 +635,7 @@ async function sendPendingList(env, chatId) {
   const pend = (await listOrders(env, 200)).filter(o => !o.tracking_number)
   if (!pend.length) return tgSend(env, chatId, '✅ No hay órdenes pendientes de tracking.', { reply_markup: MAIN_KB })
   const slice = pend.slice(0, 20)
-  const lines = slice.map(o => `• <code>${o.order_id}</code> — ${o.buyer_name} · ${o.product}`)
+  const lines = slice.map(o => `• <code>${o.order_id}</code> — ${esc(o.buyer_name)} · ${esc(o.product)}`)
   await tgSend(env, chatId, `📭 <b>Pendientes de tracking (${pend.length})</b>\n\n${lines.join('\n')}\n\n📸 Mandá la foto del sticker para asignar.`, {
     reply_markup: { inline_keyboard: slice.map(o => [{ text: `🔎 ${o.order_id} · ${o.buyer_name}`, callback_data: `ver:${o.order_id}` }]) },
   })
@@ -569,11 +647,11 @@ async function sendOrderDetail(env, chatId, id) {
   const body = [
     `🧾 <b>Orden</b> <code>${o.order_id}</code>`,
     `Estado: ${statusEs(o.status)}`,
-    `👤 ${o.buyer_name}`,
-    `📦 ${o.product}${o.quantity > 1 ? ` (x${o.quantity})` : ''}`,
+    `👤 ${esc(o.buyer_name)}`,
+    `📦 ${esc(o.product)}${o.quantity > 1 ? ` (x${o.quantity})` : ''}`,
     `💰 ${fmtMoney(o.amount, o.currency)}`,
-    `🚚 ${o.shipping_type || '—'}`,
-    `🔖 Tracking: ${o.tracking_number ? `<code>${o.tracking_number}</code>` : '— (pendiente)'}`,
+    `🚚 ${esc(o.shipping_type) || '—'}`,
+    `🔖 Tracking: ${o.tracking_number ? `<code>${esc(o.tracking_number)}</code>` : '— (pendiente)'}`,
     o.pack_id ? `Pack: <code>${o.pack_id}</code>` : null,
     `🕒 ${o.fecha || '—'}`,
   ].filter(Boolean).join('\n')
@@ -592,9 +670,9 @@ async function sendBuyerMessageManual(env, chatId, orderId, body) {
   try {
     ev = await sendBuyerEvidence(env, orderId, { text: body, photos: [] })
   } catch (e) {
-    return tgSend(env, chatId, `❌ ${e.message}`)
+    return tgSend(env, chatId, `❌ ${esc(e.message)}`)
   }
-  await tgSend(env, chatId, ev.msgOk ? '✅ Mensaje enviado al comprador.' : `⚠️ No se envió: ${ev.msgErr}`)
+  await tgSend(env, chatId, ev.msgOk ? '✅ Mensaje enviado al comprador.' : `⚠️ No se envió: ${esc(ev.msgErr)}`)
 }
 
 // ── Botones inline (callback_query) ──────────────────────────
@@ -607,9 +685,17 @@ async function handleCallback(env, cq, ctx) {
   if (data.startsWith('igm:')) {
     const acc = data.slice(4)
     if (acc === 'panel') return sendIgPanel(env, chatId)
+    if (acc === 'foco') {           // switch de fuente: cicla AMBAS→DRIVE→ML→AMBAS
+      await setFoco(env, FOCO_NEXT[(await getFoco(env)) ?? 'null'])
+      return sendIgPanel(env, chatId)
+    }
+    if (acc === 'historias') {      // switch de historias: on ⇄ off
+      await setHistorias(env, !(await getHistorias(env)))
+      return sendIgPanel(env, chatId)
+    }
     const map = { rush: 'rush', goteo: 'auto 90', parar: 'parar', seguir: 'seguir',
                   cola: 'cola', stock: 'stock', ahora: 'ahora 3', promo: 'promo', off: 'auto off',
-                  rehist: 'rehistorias', delhist: 'borrarhistorias' }
+                  rehist: 'rehistorias', delhist: 'borrarhistorias', reintentar: 'reintentar' }
     if (map[acc]) return handleIgCommand(env, chatId, map[acc], ctx)
     return
   }
@@ -775,7 +861,7 @@ async function withMlGuard(env, chatId, fn) {
         { reply_markup: MAIN_KB })
     }
     logErr('ML historial:', e?.message)
-    return tgSend(env, chatId, `❌ Error consultando ML: ${e?.message || e}`, { reply_markup: MAIN_KB })
+    return tgSend(env, chatId, `❌ Error consultando ML: ${esc(e?.message || e)}`, { reply_markup: MAIN_KB })
   }
 }
 
@@ -789,8 +875,8 @@ function nombreCliente(o) {
 
 // Línea de una venta: 2 líneas simples y humanas (nombre + monto / producto + fecha).
 function fmtOrderLine(o) {
-  return `${estadoIcon(o.estado)} <b>${nombreCliente(o)}</b> · ${fmtMoney(o.monto, o.currency)}\n` +
-         `   ${truncar(o.producto, 34)} · ${fechaCorta(o.fecha)}`
+  return `${estadoIcon(o.estado)} <b>${esc(nombreCliente(o))}</b> · ${fmtMoney(o.monto, o.currency)}\n` +
+         `   ${esc(truncar(o.producto, 34))} · ${fechaCorta(o.fecha)}`
 }
 
 // Botón por venta: nombre + monto (el order_id completo va en callback_data).
@@ -840,13 +926,13 @@ async function runMlSearch(env, chatId, query) {
   if (!query) return tgSend(env, chatId, 'Falta el texto a buscar.', { reply_markup: MAIN_KB })
   return withMlGuard(env, chatId, async () => {
     const orders = await searchOrderByBuyer(env, query)   // ya trae el nombre real
-    if (!orders.length) return tgSend(env, chatId, `Sin resultados para “${query}”.`, { reply_markup: MAIN_KB })
+    if (!orders.length) return tgSend(env, chatId, `Sin resultados para “${esc(query)}”.`, { reply_markup: MAIN_KB })
     const top = orders.slice(0, 10)
     const lines = top.map(fmtOrderLine)
     const kb = ordersListMarkup(top)
     kb.push([{ text: '⬅️ Menú historial', callback_data: 'hmenu' }])
     await tgSend(env, chatId,
-      `🔍 <b>${query}</b>  <i>(${orders.length})</i>\n\n${lines.join('\n')}`,
+      `🔍 <b>${esc(query)}</b>  <i>(${orders.length})</i>\n\n${lines.join('\n')}`,
       { reply_markup: { inline_keyboard: kb } })
   })
 }
@@ -878,12 +964,12 @@ async function sendMlDetail(env, chatId, orderId) {
   return withMlGuard(env, chatId, async () => {
     const o = await getOrderDetail(env, orderId)
     const body = [
-      `🧾 <b>${nombreCliente(o)}</b>`,
+      `🧾 <b>${esc(nombreCliente(o))}</b>`,
       `${estadoIcon(o.estado)} ${statusEs(o.estado)}`,
-      `📦 ${o.producto}${o.cantidad > 1 ? ` ×${o.cantidad}` : ''}`,
+      `📦 ${esc(o.producto)}${o.cantidad > 1 ? ` ×${o.cantidad}` : ''}`,
       `💰 <b>${fmtMoney(o.monto, o.currency)}</b>`,
       o.ship_status ? `🚚 ${statusEs(o.ship_status)}` : null,
-      `🔖 ${o.tracking_number ? `<code>${o.tracking_number}</code>` : 'sin tracking aún'}`,
+      `🔖 ${o.tracking_number ? `<code>${esc(o.tracking_number)}</code>` : 'sin tracking aún'}`,
       `🕒 ${fechaCorta(o.fecha)}`,
       `<i>N° de orden: ${o.order_id}</i>`,
     ].filter(Boolean).join('\n')
@@ -902,8 +988,8 @@ async function sendShipment(env, chatId, orderId) {
     await tgSend(env, chatId, [
       `📦 <b>Envío</b> · Orden ${shortId(o.order_id)}`,
       `${statusEs(o.ship_status) || '—'}`,
-      `🔖 ${o.tracking_number ? `<code>${o.tracking_number}</code>` : 'sin tracking aún'}`,
-      `<i>Shipment ${o.shipment_id}</i>`,
+      `🔖 ${o.tracking_number ? `<code>${esc(o.tracking_number)}</code>` : 'sin tracking aún'}`,
+      `<i>Shipment ${esc(o.shipment_id)}</i>`,
     ].join('\n'), { reply_markup: { inline_keyboard: [[{ text: '⬅️ Volver', callback_data: `vord:${o.order_id}` }]] } })
   })
 }
@@ -929,7 +1015,7 @@ async function runReauth(env, chatId, code) {
       { reply_markup: MAIN_KB })
   } catch (e) {
     await tgSend(env, chatId,
-      `❌ No pude reconectar: ${e.message}\n` +
+      `❌ No pude reconectar: ${esc(e.message)}\n` +
       'El code dura ~10 min y es de un solo uso. Genera uno nuevo con este enlace y pégamelo:\n' +
       buildAuthUrl(env),
       { disable_web_page_preview: true })
@@ -973,10 +1059,12 @@ async function runShowConversation(env, chatId, orderId) {
     if (!messages.length) {
       return tgSend(env, chatId, `No hay mensajes en la conversación de la orden <code>${orderId}</code>.`, { reply_markup: MAIN_KB })
     }
+    // El texto viene tal cual lo escribió el comprador: sin escapar, un "<" o un
+    // "&" tumbaba el render HTML y Telegram devolvía 400 (conversación invisible).
     const lines = messages.map(m => {
-      const quien = m.from_seller ? '🟦 Tú' : `👤 ${buyerFirst}`
+      const quien = m.from_seller ? '🟦 Tú' : `👤 ${esc(buyerFirst)}`
       const fecha = (m.date || '').slice(0, 16).replace('T', ' ')
-      return `${quien}${fecha ? ` · ${fecha}` : ''}\n${m.text || '—'}`
+      return `${quien}${fecha ? ` · ${fecha}` : ''}\n${esc(m.text) || '—'}`
     })
     await tgSend(env, chatId,
       `💬 <b>Conversación</b> — orden <code>${orderId}</code>\n\n${lines.join('\n\n')}`,
@@ -1004,7 +1092,7 @@ async function previewTemplate(env, chatId, tmplKey, orderId) {
   const texto = fn(nombre)
   await setPending(env, chatId, { mode: 'confirm_tmpl', order_id: orderId, text: texto })
   await tgSend(env, chatId,
-    `📋 <b>Vista previa</b> — orden <code>${orderId}</code>\n\n${texto}\n\n¿Enviar este mensaje al comprador?`,
+    `📋 <b>Vista previa</b> — orden <code>${esc(orderId)}</code>\n\n${esc(texto)}\n\n¿Enviar este mensaje al comprador?`,
     { reply_markup: { inline_keyboard: [[
       { text: '✅ Confirmar', callback_data: 'tsend' },
       { text: '❌ Cancelar',  callback_data: 'tcancel' },
@@ -1022,7 +1110,7 @@ async function sendTemplateConfirmed(env, chatId) {
   return withMlGuard(env, chatId, async () => {
     const r = await sendMessageToBuyer(env, p.order_id, p.text)
     await tgSend(env, chatId,
-      r.ok ? '✅ Mensaje enviado al comprador.' : `⚠️ No se envió: ${r.error}`,
+      r.ok ? '✅ Mensaje enviado al comprador.' : `⚠️ No se envió: ${esc(r.error)}`,
       { reply_markup: MAIN_KB })
   })
 }
@@ -1069,7 +1157,7 @@ async function analyzeStickerPhoto(env, chatId, msg) {
     data = await extractTrackingFromImage(b64, env.ANTHROPIC_API_KEY)
   } catch (e) {
     logErr('visión:', e.message)
-    return tgSend(env, chatId, `❌ Error al leer la imagen: ${e.message}`)
+    return tgSend(env, chatId, `❌ Error al leer la imagen: ${esc(e.message)}`)
   }
 
   if (!data.tracking_number) {
@@ -1079,8 +1167,8 @@ async function analyzeStickerPhoto(env, chatId, msg) {
   const { pending, best } = await findPendingMatches(env, data.recipient_name)
   if (pending.length === 0) {
     return tgSend(env, chatId,
-      `📦 Tracking leído: <code>${data.tracking_number}</code>\n` +
-      `👤 Destinatario: ${data.recipient_name || '—'}\n\n` +
+      `📦 Tracking leído: <code>${esc(data.tracking_number)}</code>\n` +
+      `👤 Destinatario: ${esc(data.recipient_name) || '—'}\n\n` +
       'No hay órdenes pendientes de tracking ahora mismo.')
   }
 
@@ -1092,9 +1180,9 @@ async function analyzeStickerPhoto(env, chatId, msg) {
       order_id:        match.order_id,
     })
     return tgSend(env, chatId,
-      `📦 Tracking: <code>${data.tracking_number}</code>\n` +
-      `👤 Destinatario leído: ${data.recipient_name || '—'}\n\n` +
-      `¿Es la orden de <b>${match.buyer_name}</b> por <b>${match.product}</b>?`,
+      `📦 Tracking: <code>${esc(data.tracking_number)}</code>\n` +
+      `👤 Destinatario leído: ${esc(data.recipient_name) || '—'}\n\n` +
+      `¿Es la orden de <b>${esc(match.buyer_name)}</b> por <b>${esc(match.product)}</b>?`,
       { reply_markup: { inline_keyboard: [[
         { text: '✅ Sí', callback_data: 'si' },
         { text: '❌ No', callback_data: 'no' },
@@ -1107,12 +1195,12 @@ async function analyzeStickerPhoto(env, chatId, msg) {
 }
 
 async function doAssign(env, chatId, orderId, tracking) {
-  await tgSend(env, chatId, `⏳ Asignando tracking <code>${tracking}</code> a la orden <code>${orderId}</code>…`)
+  await tgSend(env, chatId, `⏳ Asignando tracking <code>${esc(tracking)}</code> a la orden <code>${esc(orderId)}</code>…`)
   let res
   try {
     res = await assignTracking(env, orderId, tracking)
   } catch (e) {
-    return tgSend(env, chatId, `❌ ${e.message}`)
+    return tgSend(env, chatId, `❌ ${esc(e.message)}`)
   }
   // Pasamos a recolectar fotos del empaque; el mensaje al comprador (tracking +
   // fotos) se envía al recibir /listo, vía la mensajería de ML (todo tipo de envío).
@@ -1127,9 +1215,9 @@ async function doAssign(env, chatId, orderId, tracking) {
   })
   await tgSend(env, chatId, [
     `📦 Orden <code>${orderId}</code>`,
-    `🔖 Tracking guardado: <code>${tracking}</code>`,
+    `🔖 Tracking guardado: <code>${esc(tracking)}</code>`,
     res.trackingOk ? '✅ Tracking actualizado en MercadoLibre'
-                   : `⚠️ ML no aceptó el tracking (igual se enviará por mensaje): ${res.trackingErr}`,
+                   : `⚠️ ML no aceptó el tracking (igual se enviará por mensaje): ${esc(res.trackingErr)}`,
     '',
     '📸 Ahora mandá las fotos del empaque y tocá <b>Enviar</b> cuando termines.',
     '(O tocá Enviar para mandar solo el número de seguimiento.)',
@@ -1160,13 +1248,13 @@ async function finalizeEvidence(env, chatId, p) {
     ev = await sendBuyerEvidence(env, p.order_id, { text, photos })
   } catch (e) {
     await clearPending(env, chatId)
-    return tgSend(env, chatId, `❌ No se pudo enviar al comprador: ${e.message}`)
+    return tgSend(env, chatId, `❌ No se pudo enviar al comprador: ${esc(e.message)}`)
   }
 
   await clearPending(env, chatId)
   await tgSend(env, chatId, [
-    `📦 Orden <code>${p.order_id}</code> — envío al comprador:`,
-    ev.msgOk ? '✅ Mensaje enviado al comprador' : `⚠️ Mensaje no enviado: ${ev.msgErr}`,
+    `📦 Orden <code>${esc(p.order_id)}</code> — envío al comprador:`,
+    ev.msgOk ? '✅ Mensaje enviado al comprador' : `⚠️ Mensaje no enviado: ${esc(ev.msgErr)}`,
     `🖼️ Fotos adjuntadas: ${ev.attachOk}` +
       (ev.attachErr?.length ? ` (fallaron ${ev.attachErr.length})` : ''),
   ].join('\n'))

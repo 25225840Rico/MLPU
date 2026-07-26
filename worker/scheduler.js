@@ -16,6 +16,7 @@ import { tgSend } from './telegram-bot.js'
 import { sendBuyerMessage } from './messaging.js'
 import { firstName } from './ml-history.js'
 import { mlFetch } from './ml-fetch.js'
+import { esc } from './ig-logic.js'
 
 const ML_API = 'https://api.mercadolibre.com'
 const log    = (...a) => console.log('[ML-BOT]', ...a)
@@ -65,7 +66,7 @@ function msgStatusLine(res) {
   if (res?.ok) return '✅ Mensaje entregado al comprador.'
   if (res?.need_buyer_reply)
     return '⏸️ ML no deja iniciar otro mensaje (cupo agotado). Queda pendiente hasta que el comprador responda; lo reintento solo.'
-  return `⚠️ No se pudo enviar al comprador: ${res?.error || 'error desconocido'}`
+  return `⚠️ No se pudo enviar al comprador: ${esc(res?.error) || 'error desconocido'}`
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -150,7 +151,7 @@ export async function runScheduled(env) {
     // (el bot lo canjea solo). Así no depende de la terminal ni de nadie.
     await tgSend(env, env.TELEGRAM_CHAT_ID,
       `🔑 <b>Se cortó la conexión con MercadoLibre</b>\n` +
-      `No pude renovar el token: ${e.message}\n\n` +
+      `No pude renovar el token: ${esc(e.message)}\n\n` +
       `<b>Reconectá en 2 pasos:</b>\n` +
       `1) Abrí este enlace y aceptá:\n${buildAuthUrl(env)}\n` +
       `2) Copiá el <code>code</code> que aparece en la página y pegámelo acá (o mandá <code>/reauth &lt;code&gt;</code>).`,
@@ -223,7 +224,7 @@ export async function runScheduled(env) {
       if (status === 'shipped') {
         if (!rec.shipped_notified) {
           await tgSend(env, env.TELEGRAM_CHAT_ID,
-            `🚚 Orden <code>${rec.order_id}</code> en camino (${rec.buyer_name}).`)
+            `🚚 Orden <code>${esc(rec.order_id)}</code> en camino (${esc(rec.buyer_name)}).`)
           rec.shipped_notified = true
           await saveOrder(env, rec)
         }
@@ -236,7 +237,7 @@ export async function runScheduled(env) {
           rec.delivered_at = Date.now()
           rec.delivered_notified = true
           await tgSend(env, env.TELEGRAM_CHAT_ID,
-            `📬 Orden <code>${rec.order_id}</code> ENTREGADA (${rec.buyer_name}).`)
+            `📬 Orden <code>${esc(rec.order_id)}</code> ENTREGADA (${esc(rec.buyer_name)}).`)
           await saveOrder(env, rec)
         }
 
@@ -276,7 +277,7 @@ export async function runScheduled(env) {
             if (!fbRes.ok) logErr('feedback falló para orden', rec.order_id, fbRes.error)
             await tgSend(env, env.TELEGRAM_CHAT_ID,
               `${fbRes.ok ? '✅' : '⚠️'} Feedback orden <code>${rec.order_id}</code>` +
-              (fbRes.ok ? '' : ` (${fbRes.error})`))
+              (fbRes.ok ? '' : ` (${esc(fbRes.error)})`))
             await saveOrder(env, rec)
           }
 

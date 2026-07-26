@@ -1,0 +1,68 @@
+HANDOFF - MLPU (bot ML + Instagram) - 2026-07-16, sesion 14 (corte por contexto)
+
+OBJETIVO GENERAL: bot Telegram (t.me/Pulicadorlibre_bot) sobre Cloudflare Worker
+(mlpu-proxy) que cataloga y publica autos 1:64 en MercadoLibre y re-publica el
+inventario en Instagram @topwheels.cl (feed con fondo blur + historia con banner
+DISPONIBLE), con cola en D1 (mlpu-db, tabla ig_queue).
+
+ESTADO ACTUAL (todo desplegado y pusheado):
+- Repo: C:\Users\aronr\OneDrive\Documentos\PROYECTOS\automl (main 4dc6238
+  pusheado; codigo del rush en 1423030). Worker Version d4c96a82. 56/56 tests.
+- Esta sesion arreglo los DUPLICADOS del 15/07 (3 causas: sin idempotencia
+  feed/historia, sin lock/claim entre corridas, poll de Meta de solo 15 s) con:
+  claim atomico por fila (estado 'publicando' + columna claimed_en, migrada en
+  remote), ig_media_id guardado apenas sale el feed (reintento nunca lo repite),
+  historia best-effort, lock TTL 5 min, recovery de 'publicando' >15 min,
+  poll ~60 s. Ademas /ig auto (goteo) y /ig rush.
+- MODO RUSH ACTIVO en prod (ig_config.modo_auto={rush:true}): el cron */15
+  publica 3 productos por tick, 09:00-23:00 Chile, consultando el cupo REAL de
+  Meta en vivo (content_publishing_limit: quota_total=100/24h, las historias
+  CUENTAN; reserva 4 para /ig promo). Cupo lleno -> UNA alerta con hora de
+  reapertura (post mas viejo de la ventana +24h) y retoma solo.
+- Cola al momento del corte: ~130 pendientes, 14+ publicados, 0 error.
+
+ULTIMO PASO COMPLETADO (parte 4, deploy 2ad74816, commit d49e373): RUSH
+INMEDIATO VERIFICADO — cron cada 1 minuto, 7 productos publicados en los 5 min
+posteriores al deploy (15:46-15:50 UTC, ~2/min, 0 errores). Ademas PANEL DE
+BOTONES: boton "IG/Instagram" en la botonera de Telegram abre panel inline
+(Rush YA / Goteo 90m / Pausar / Seguir / Ver cola / Cargar stock / Subir 3 /
+Promo / Off / Actualizar); los comandos /ig siguen operativos.
+Rush con guardas baratas por tick: horario 09-23 Chile -> COUNT pendientes ->
+siesta (rush_avisado.reabre) -> recien ahi consulta el cupo real de Meta
+(content_publishing_limit, 100/24h, historias cuentan, reserva 4).
+
+RESULTADO VERIFICADO (01:38 UTC 17/07): el rush subio ~37 productos el 16/07
+(48 publicados total en ig_queue; 37 confirmados en el feed real de
+@topwheels.cl via Graph API). Cupo lleno ~20:18 UTC -> alerta enviada ->
+siesta (rush_avisado.reabre=2026-07-17T02:13Z); retoma solo. Quedan ~96
+pendientes (~2 dias para vaciar la cola).
+
+PROXIMO PASO EXACTO:
+1) ULTIMO TEMA ABIERTO: el usuario dijo "no los veo" (los botones). Causa:
+   Telegram no refresca el reply keyboard hasta que el bot manda un mensaje
+   nuevo con el teclado. Ya se le indico: mandar /start (refresca botonera
+   con el boton Instagram) o /ig (abre el panel inline directo). CONFIRMAR
+   con el usuario que ya ve el panel y que le acomoda.
+2) Chequeo de salud al retomar la sesion:
+   cd worker && npx wrangler d1 execute mlpu-db --remote --command
+   "SELECT estado, COUNT(*) FROM ig_queue GROUP BY estado"
+   -> pendientes bajando ~48/dia, sin 'publicando' viejas, sin 'error'.
+Si algo fallo: revisar ultimo_error en ig_queue y logs con wrangler tail.
+
+PENDIENTES DEL USUARIO:
+- SEGURIDAD: rotar App Secret en panel Meta (quedo pegado en un chat el 15/07)
+  y re-subir: cd worker && npx wrangler secret put META_APP_SECRET.
+- Decidir si re-publicar la Tundra (ig_queue id 4): DB dice publicado pero el
+  usuario borro ese post del feed a mano.
+- Resto de pendientes heredados: ver progress/STATE.json open_tasks.
+
+ARCHIVOS CLAVE:
+- worker/ig-queue.js (cola, claim, rush, goteo) - worker/ig-api.js (Graph API,
+  quota) - worker/ig-logic.js (puro: captions, horarios, horaChile)
+- worker/telegram-bot.js handleIgCommand (/ig rush|auto|ahora|cola|...)
+- worker/schema-ig.sql (estados y claimed_en) - worker/test/* (56 tests, npm test)
+- progress/CHECKPOINT.md (resumen) - progress/log/2026-07-16.md (post-mortem
+  completo de esta sesion con evidencia)
+
+COMO RETOMAR: leer este archivo y ejecutar el PROXIMO PASO EXACTO. No hay
+codigo a medio escribir; el arbol esta limpio y todo pusheado.

@@ -1,68 +1,67 @@
-HANDOFF - MLPU (bot ML + Instagram) - 2026-07-16, sesion 14 (corte por contexto)
+HANDOFF - AUTOML / MLPU-IG - 2026-07-19 (sesion 17)
 
-OBJETIVO GENERAL: bot Telegram (t.me/Pulicadorlibre_bot) sobre Cloudflare Worker
-(mlpu-proxy) que cataloga y publica autos 1:64 en MercadoLibre y re-publica el
-inventario en Instagram @topwheels.cl (feed con fondo blur + historia con banner
-DISPONIBLE), con cola en D1 (mlpu-db, tabla ig_queue).
+OBJETIVO DE LA SESION (pedido del usuario, autorizado explicitamente):
+En la cuenta IG @topwheels.cl (Hot Wheels): (1) ELIMINAR los posts de los
+Nissan 370Z y (2) bajar 35% los precios SOLO EN INSTAGRAM (ML intacto).
+EL USUARIO EXIGE LA VIA API ("QUIERO HACERLO DESDE LA API NO ASI"):
+rechazo el borrado por navegador a mitad de camino (se CANCELO el modal;
+NADA se borro por navegador).
 
-ESTADO ACTUAL (todo desplegado y pusheado):
-- Repo: C:\Users\aronr\OneDrive\Documentos\PROYECTOS\automl (main 4dc6238
-  pusheado; codigo del rush en 1423030). Worker Version d4c96a82. 56/56 tests.
-- Esta sesion arreglo los DUPLICADOS del 15/07 (3 causas: sin idempotencia
-  feed/historia, sin lock/claim entre corridas, poll de Meta de solo 15 s) con:
-  claim atomico por fila (estado 'publicando' + columna claimed_en, migrada en
-  remote), ig_media_id guardado apenas sale el feed (reintento nunca lo repite),
-  historia best-effort, lock TTL 5 min, recovery de 'publicando' >15 min,
-  poll ~60 s. Ademas /ig auto (goteo) y /ig rush.
-- MODO RUSH ACTIVO en prod (ig_config.modo_auto={rush:true}): el cron */15
-  publica 3 productos por tick, 09:00-23:00 Chile, consultando el cupo REAL de
-  Meta en vivo (content_publishing_limit: quota_total=100/24h, las historias
-  CUENTAN; reserva 4 para /ig promo). Cupo lleno -> UNA alerta con hora de
-  reapertura (post mas viejo de la ventana +24h) y retoma solo.
-- Cola al momento del corte: ~130 pendientes, 14+ publicados, 0 error.
+ESTADO ACTUAL (todo verificado):
+- HECHO en D1 remoto (mlpu-db, tabla ig_queue):
+  * Backup previo completo (145 filas) en
+    progress/log/2026-07-19-ig-backup-precola.json  <- UNICA via de reversion.
+  * -35% aplicado a 142 filas: precio=(CAST(precio*0.65 AS INTEGER)/10)*10
+    -> rango $3.240-$43.540 (ej 23990->15590). ML NO tocado.
+  * 3 filas 370Z blindadas (ids 19 rojo / 35 amarillo / 72 azul):
+    ig_media_id=NULL, ig_story_id=NULL, nota en ultimo_error ->
+    ningun flujo (publisher/rehistorias/stock) los re-publica.
+- PENDIENTE: borrar de IG los 3 POSTS del feed 370Z. DELETE via Graph API
+  fallo DOS veces con "(#10) Insufficient permissions":
+  * token de D1 (ig_config.meta_token): sin instagram_manage_contents.
+  * token manual que pego el usuario (18 permisos): TAMPOCO lo trae.
+  Doc oficial: DELETE /<media_id> exige instagram_basic +
+  instagram_manage_contents (Facebook Login for Business, graph.facebook.com).
+- Chrome: sesion IG de @topwheels.cl ACTIVA; quedo abierta la pestana en
+  https://developers.facebook.com/tools/explorer/
 
-ULTIMO PASO COMPLETADO (parte 4, deploy 2ad74816, commit d49e373): RUSH
-INMEDIATO VERIFICADO — cron cada 1 minuto, 7 productos publicados en los 5 min
-posteriores al deploy (15:46-15:50 UTC, ~2/min, 0 errores). Ademas PANEL DE
-BOTONES: boton "IG/Instagram" en la botonera de Telegram abre panel inline
-(Rush YA / Goteo 90m / Pausar / Seguir / Ver cola / Cargar stock / Subir 3 /
-Promo / Off / Actualizar); los comandos /ig siguen operativos.
-Rush con guardas baratas por tick: horario 09-23 Chile -> COUNT pendientes ->
-siesta (rush_avisado.reabre) -> recien ahi consulta el cupo real de Meta
-(content_publishing_limit, 100/24h, historias cuentan, reserva 4).
+ULTIMO PASO COMPLETADO: instrucciones dadas al usuario para generar el
+token en el Graph API Explorer (elegir app MLPU -> Permisos -> buscar
+"instagram_manage_contents" -> agregar -> Generate Access Token -> pegarlo).
 
-RESULTADO VERIFICADO (01:38 UTC 17/07): el rush subio ~37 productos el 16/07
-(48 publicados total en ig_queue; 37 confirmados en el feed real de
-@topwheels.cl via Graph API). Cupo lleno ~20:18 UTC -> alerta enviada ->
-siesta (rush_avisado.reabre=2026-07-17T02:13Z); retoma solo. Quedan ~96
-pendientes (~2 dias para vaciar la cola).
-
-PROXIMO PASO EXACTO:
-1) ULTIMO TEMA ABIERTO: el usuario dijo "no los veo" (los botones). Causa:
-   Telegram no refresca el reply keyboard hasta que el bot manda un mensaje
-   nuevo con el teclado. Ya se le indico: mandar /start (refresca botonera
-   con el boton Instagram) o /ig (abre el panel inline directo). CONFIRMAR
-   con el usuario que ya ve el panel y que le acomoda.
-2) Chequeo de salud al retomar la sesion:
-   cd worker && npx wrangler d1 execute mlpu-db --remote --command
-   "SELECT estado, COUNT(*) FROM ig_queue GROUP BY estado"
-   -> pendientes bajando ~48/dia, sin 'publicando' viejas, sin 'error'.
-Si algo fallo: revisar ultimo_error en ig_queue y logs con wrangler tail.
-
-PENDIENTES DEL USUARIO:
-- SEGURIDAD: rotar App Secret en panel Meta (quedo pegado en un chat el 15/07)
-  y re-subir: cd worker && npx wrangler secret put META_APP_SECRET.
-- Decidir si re-publicar la Tundra (ig_queue id 4): DB dice publicado pero el
-  usuario borro ese post del feed a mano.
-- Resto de pendientes heredados: ver progress/STATE.json open_tasks.
+PROXIMO PASO EXACTO (al recibir el token del usuario):
+1. Verificar permisos: GET graph.facebook.com/v25.0/me/permissions?access_token=T
+   (debe listar instagram_manage_contents:granted).
+2. Por cada media id (verificar antes con GET ?fields=caption que el caption
+   contenga "370z"; los 3 tienen 0 likes/0 comentarios):
+     DELETE https://graph.facebook.com/v25.0/<MEDIA_ID>?access_token=T
+   MEDIA IDS (tambien en el backup):
+     fila 19 -> 18202783930363115  (p/Da2_9OJCQU4)
+     fila 35 -> 18105270200278426  (p/Da3BKqUiacv)
+     fila 72 -> 17883367044454857  (p/Da8OlFdF3bP)
+   (Habia un script listo en el scratchpad de la sesion anterior,
+   ig-action.js: token via env IG_TOKEN, verifica caption, --delete borra.
+   El scratchpad es por sesion: regenerarlo con lo de arriba si hace falta.)
+3. NO sembrar el token corto en D1. Opcional posterior: intercambiarlo por
+   token largo (fb_exchange_token, requiere META_APP_ID/SECRET del worker)
+   y re-sembrar ig_config.meta_token para que /ig borrarhistorias funcione.
+4. Decidir con el usuario los 142 posts publicados con PRECIO VIEJO en el
+   caption: la Graph API NO edita captions (limite duro). Opciones:
+   borrar+republicar via rush (caption nuevo -35%, ~3 dias por cupo
+   100/24h, engagement casi nulo) o edicion manual.
+OJO: /ig stock encola items nuevos a precio ML SIN -35%.
+OJO: rush ACTIVO hoy; siesta por cupo hasta ~22:02 UTC del 19-jul.
 
 ARCHIVOS CLAVE:
-- worker/ig-queue.js (cola, claim, rush, goteo) - worker/ig-api.js (Graph API,
-  quota) - worker/ig-logic.js (puro: captions, horarios, horaChile)
-- worker/telegram-bot.js handleIgCommand (/ig rush|auto|ahora|cola|...)
-- worker/schema-ig.sql (estados y claimed_en) - worker/test/* (56 tests, npm test)
-- progress/CHECKPOINT.md (resumen) - progress/log/2026-07-16.md (post-mortem
-  completo de esta sesion con evidencia)
+- C:\Users\aronr\OneDrive\Documentos\PROYECTOS\automl\
+  * progress/log/2026-07-19-ig-backup-precola.json (backup + media ids)
+  * progress/log/2026-07-19.md (detalle de la sesion)
+  * worker/ig-api.js (igDeleteMedia), worker/ig-queue.js, worker/ig-logic.js
+  * SAVE.txt (entrada sesion 17 arriba)
+- D1 remoto: npx wrangler d1 execute mlpu-db --remote --json --command "..."
+  (correr desde la carpeta worker/; wrangler ya autenticado).
+- HANDOFF anterior (proyecto MULTILUB, distinto): preservado en
+  progress/log/HANDOFF-multilub-2026-07-18.txt
 
-COMO RETOMAR: leer este archivo y ejecutar el PROXIMO PASO EXACTO. No hay
-codigo a medio escribir; el arbol esta limpio y todo pusheado.
+COMO RETOMAR: leer este HANDOFF + SAVE.txt; NO releer historial. Si el
+usuario pega un token EAAG..., ejecutar el PROXIMO PASO EXACTO tal cual.

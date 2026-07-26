@@ -8,6 +8,7 @@
  * Clave índice `orders:index`: array de ids (más reciente primero) para listar.
  */
 import { tgSend } from './telegram-bot.js'
+import { esc } from './ig-logic.js'
 
 const log    = (...a) => console.log('[ML-BOT]', ...a)
 const logErr = (...a) => console.error('[ML-BOT]', ...a)
@@ -89,21 +90,34 @@ export async function recordOrderFromML(env, order, shipment) {
   }
 
   const shouldAlert = rec.status === 'paid' && !rec.alerted
-  await saveOrder(env, { ...rec, alerted: rec.alerted || shouldAlert })
 
-  if (shouldAlert) {
-    const text =
-      '🛒 <b>Nueva venta confirmada</b>\n\n' +
-      `👤 <b>Comprador:</b> ${rec.buyer_name}\n` +
-      `📦 <b>Producto:</b> ${rec.product}${rec.quantity > 1 ? ` (x${rec.quantity})` : ''}\n` +
-      `💰 <b>Monto:</b> ${fmtMoney(rec.amount, rec.currency)}\n` +
-      `🚚 <b>Envío:</b> ${rec.shipping_type}\n` +
-      `🆔 <b>Orden:</b> <code>${rec.order_id}</code>` +
-      (rec.pack_id ? ` · Pack: <code>${rec.pack_id}</code>` : '')
-    const res = await tgSend(env, env.TELEGRAM_CHAT_ID, text)
-    if (res?.ok) log('Alerta enviada para orden', orderId)
-    else logErr('No se pudo enviar alerta de orden', orderId, res?.error)
-  } else {
+  // La orden se guarda SIEMPRE, pero `alerted` solo se marca cuando Telegram
+  // confirmó el envío. Antes se persistía `alerted:true` antes de intentar el
+  // aviso: si Telegram fallaba (429, red, token), la venta quedaba marcada como
+  // avisada y la notificación se perdía para siempre — ML reintenta la notif,
+  // pero encontraba `alerted:true` y no volvía a alertar. Un aviso duplicado es
+  // infinitamente preferible a una venta que nadie ve.
+  await saveOrder(env, rec)
+
+  if (!shouldAlert) {
     log('Orden', orderId, `guardada (status=${rec.status}, alerted=${rec.alerted})`)
+    return
+  }
+
+  const text =
+    '🛒 <b>Nueva venta confirmada</b>\n\n' +
+    `👤 <b>Comprador:</b> ${esc(rec.buyer_name)}\n` +
+    `📦 <b>Producto:</b> ${esc(rec.product)}${rec.quantity > 1 ? ` (x${rec.quantity})` : ''}\n` +
+    `💰 <b>Monto:</b> ${fmtMoney(rec.amount, rec.currency)}\n` +
+    `🚚 <b>Envío:</b> ${esc(rec.shipping_type)}\n` +
+    `🆔 <b>Orden:</b> <code>${esc(rec.order_id)}</code>` +
+    (rec.pack_id ? ` · Pack: <code>${esc(rec.pack_id)}</code>` : '')
+  const res = await tgSend(env, env.TELEGRAM_CHAT_ID, text)
+  if (res?.ok) {
+    await saveOrder(env, { ...rec, alerted: true })
+    log('Alerta enviada para orden', orderId)
+  } else {
+    logErr('No se pudo enviar alerta de orden', orderId, res?.error,
+      '— queda sin marcar para reintentar en la próxima notificación de ML')
   }
 }

@@ -72,6 +72,29 @@ export function composeLite(bytes, story = false, bannerBytes = null) {
   return finishCanvas(canvas, src, bannerBytes)
 }
 
+// El banner "DISPONIBLE" (PNG de los static assets) se pide una vez por isolate
+// y queda cacheado: en un rush se compone una historia por producto y no tiene
+// sentido releerlo cada vez.
+//
+// Si NO se puede cargar, la historia sale sin banner. Se deja pasar a propósito
+// —devolver un error acá haría que ig-api cayera al último eslabón de la cadena
+// y publicara la foto CRUDA, sin blur ni banner, que es peor— pero se registra
+// como error para que quede en los logs del Worker en vez de desaparecer.
+let bannerCache = null
+async function getBanner(env, origin) {
+  if (bannerCache !== null) return bannerCache
+  if (!env?.ASSETS) { console.error('[IG] sin binding ASSETS: la historia sale sin banner'); return null }
+  try {
+    const b = await env.ASSETS.fetch(new Request(`${origin}/ig/disponible.png`))
+    if (!b.ok) { console.error(`[IG] banner no disponible (HTTP ${b.status}): la historia sale sin banner`); return null }
+    bannerCache = new Uint8Array(await b.arrayBuffer())
+    return bannerCache
+  } catch (e) {
+    console.error('[IG] banner no disponible:', e.message)
+    return null
+  }
+}
+
 // GET /ig/img?u=<url mlstatic encodeada>[&s=1][&m=lite] — no es un proxy
 // abierto: solo acepta fotos del CDN de ML. En historias estampa el banner
 // DISPONIBLE. m=lite: blur barato (fallback del compositor completo).
@@ -87,12 +110,7 @@ export async function igImageProxy(request, env) {
   if (!r.ok) return new Response(`no pude bajar la imagen (${r.status})`, { status: 502 })
   const bytes = new Uint8Array(await r.arrayBuffer())
 
-  let bannerBytes = null
-  if (story && env?.ASSETS) {
-    // el banner vive en los static assets del propio Worker (env.ASSETS)
-    const b = await env.ASSETS.fetch(new Request(`${url.origin}/ig/disponible.png`))
-    if (b.ok) bannerBytes = new Uint8Array(await b.arrayBuffer())
-  }
+  const bannerBytes = story ? await getBanner(env, url.origin) : null
   const jpeg = lite ? composeLite(bytes, story, bannerBytes) : composeBlur(bytes, story, bannerBytes)
   return new Response(jpeg, {
     headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' },

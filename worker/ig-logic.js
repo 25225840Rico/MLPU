@@ -10,17 +10,33 @@ export function fmtCLP(n) {
   return '$' + Math.round(Number(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
 
+// Telegram con parse_mode:'HTML' rechaza el mensaje ENTERO (400) si el texto
+// interpolado trae & < >. Un título de ML como "Hot Wheels & Matchbox" bastaba
+// para perder el aviso de una venta o de una publicación. Vive acá (módulo hoja,
+// sin imports) para que lo usen telegram-bot.js, ig-queue.js y orders.js sin
+// crear un ciclo de imports entre ellos.
+export function esc(t) {
+  return String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 // Sin link de ML (pedido del usuario 2026-07-15): la compra se guía por DM.
 export function buildCaption({ titulo, precio }) {
   return `🏎️ ${titulo}\n\n💰 ${fmtCLP(precio)} · 🟢 DISPONIBLE\n📦 Envíos a todo Chile\n📩 Pídelo por DM\n\n${HASHTAGS}`
 }
 
+// Horas de INICIO de ventana permitidas (CONTRATO 4.5): una ventana dura 60 min
+// y debe terminar <= 23:00, así que la más tardía posible arranca a las 22:00.
+export const VENTANA_MIN_H = 9
+export const VENTANA_MAX_H = 22
+
 // hourly: { '0': n, ..., '23': n } (seguidores conectados por hora, de insights).
 // Elige `count` horas pico con separación mínima para no publicar dos veces seguidas.
+// B3: las horas se acotan al horario permitido ANTES de elegir; si el pico real
+// de la cuenta es de madrugada, se cae al fallback en vez de programar las 02:00.
 export function pickBestWindows(hourly, count = 2, minSepHours = 2) {
   const entries = Object.entries(hourly || {})
     .map(([h, v]) => [Number(h), Number(v) || 0])
-    .filter(([h]) => Number.isInteger(h) && h >= 0 && h <= 23)
+    .filter(([h]) => Number.isInteger(h) && h >= VENTANA_MIN_H && h <= VENTANA_MAX_H)
   if (!entries.some(([, v]) => v > 0)) return FALLBACK_WINDOWS
   entries.sort((a, b) => b[1] - a[1])
   const picked = []
@@ -58,8 +74,10 @@ export function isInWindow(date, windows, tz = 'America/Santiago') {
   return activeWindow(date, windows, tz) !== null
 }
 
-// Horario permitido del modo automático (goteo): 09:00–22:59 hora de Chile,
-// para no publicar de madrugada (se ve bot y rinde peor).
+// Horario permitido del modo automático: de 09:00 a 23:00 hora de Chile (fin
+// exclusivo, o sea la última publicación posible arranca 22:59), para no
+// publicar de madrugada (se ve bot y rinde peor). Lo usan el goteo, el rush y
+// —desde el fix B3— también el modo por ventanas.
 export const AUTO_DESDE_MIN = 9 * 60
 export const AUTO_HASTA_MIN = 23 * 60
 export function enHorarioAuto(date, tz = 'America/Santiago') {

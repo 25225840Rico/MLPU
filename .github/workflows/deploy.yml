@@ -15,7 +15,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Puerta de calidad: si la suite del Worker o las comprobaciones del SPA fallan,
+  # el build ni siquiera arranca y no se publica nada roto en Pages.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Tests del Worker (node --test)
+        run: npm test
+
+      - name: Comprobaciones del SPA
+        run: npm run test:spa
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

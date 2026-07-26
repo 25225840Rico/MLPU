@@ -67,6 +67,23 @@ function loadHistory() {
   try { return JSON.parse(localStorage.getItem(HIST_KEY) || '[]') } catch { return [] }
 }
 
+// F4: comision real de venta de ML para un precio/tipo/categoria. Devuelve null
+// cuando no se puede saber (sin red, categoria rara, respuesta inesperada): el
+// historial prefiere no mostrar ganancia antes que mostrar una inflada.
+// `pedir` es el fetcher del proxy (mlFetch): así la llamada lleva la llave del
+// Worker igual que el resto, en vez de un fetch() pelado a una URL ya armada.
+async function fetchSaleFee(pedir, path, listingType) {
+  try {
+    const r = await pedir(path)
+    if (!r.ok) return null
+    const data = await r.json()
+    const arr = Array.isArray(data) ? data : [data]
+    const item = arr.find(d => d.listing_type_id === listingType) || arr[0]
+    const fee = item?.sale_fee_amount
+    return typeof fee === 'number' ? fee : null
+  } catch { return null }
+}
+
 // ── DRAFTS
 const DRAFTS_KEY = 'mlpu_drafts'
 
@@ -74,14 +91,30 @@ async function compressForDraft(b64) {
   return compressToThumb(b64, 480)
 }
 
+// F2: esto tenia un `catch {}` vacio. Con ~45 KB de fotos por borrador y tope de
+// 50, la sesion de captura masiva pasa los ~5 MB de cuota de Safari/iOS: a partir
+// de ahi localStorage tiraba QuotaExceededError, se lo tragaba en silencio, la UI
+// decia "✓ Guardado" y el modo auto limpiaba las fotos 1200 ms despues. Cada auto
+// fotografiado se perdia sin dejar rastro.
+// Ahora: ante falta de cuota descarta los borradores mas viejos y reintenta; si
+// aun asi no entra, LANZA para que la pantalla muestre el error y no borre nada.
 function saveDraft(draft) {
-  try {
-    const all = loadDrafts()
-    const idx = all.findIndex(d => d.id === draft.id)
-    if (idx >= 0) all[idx] = draft; else all.unshift(draft)
-    if (all.length > 50) all.length = 50
-    localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
-  } catch {}
+  const all = loadDrafts()
+  const idx = all.findIndex(d => d.id === draft.id)
+  if (idx >= 0) all[idx] = draft; else all.unshift(draft)
+  if (all.length > 50) all.length = 50
+  for (;;) {
+    try {
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
+      return
+    } catch (e) {
+      const sinEspacio = e && (e.name === 'QuotaExceededError' ||
+        e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22)
+      // El borrador nuevo esta en all[0]; hay que conservarlo si o si.
+      if (!sinEspacio || all.length <= 1) throw e
+      all.pop()   // sacrifica el mas viejo y reintenta
+    }
+  }
 }
 function loadDrafts() {
   try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '[]') } catch { return [] }
@@ -147,13 +180,19 @@ async function cropSquareForML(b64, size = 1200) {
       clearTimeout(to)
       try {
         const side = Math.min(img.width, img.height)
+        // F5: los borradores se guardan a 480 px (limite de cuota de localStorage).
+        // Ampliar ese recorte a 1200 no agrega ni un pixel de detalle: solo
+        // interpola —fotos visiblemente blandas en ML— y triplica los bytes que
+        // se suben. Nunca escalamos por sobre la fuente; el piso son los 500 px
+        // que ML pide como minimo por foto.
+        const lado = Math.max(500, Math.min(size, side))
         const c = document.createElement('canvas')
-        c.width = size; c.height = size
+        c.width = lado; c.height = lado
         const ctx = c.getContext('2d')
         ctx.fillStyle = '#fff'
-        ctx.fillRect(0, 0, size, size)
+        ctx.fillRect(0, 0, lado, lado)
         const sx = (img.width - side) / 2, sy = (img.height - side) / 2
-        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size)
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, lado, lado)
         res(c.toDataURL('image/jpeg', 0.88).split(',')[1])
       } catch { res(b64) }
     }
@@ -356,6 +395,9 @@ export default function App() {
   const [anthDraft,   setAnthDraft]   = useState(() => LS.get('anthropic_key') || '')
   const [proxyUrl,    setProxyUrl]    = useState(() => LS.get('proxy_url')     || 'https://mlpu-proxy.aronricocl.workers.dev')
   const [proxyDraft,  setProxyDraft]  = useState(() => LS.get('proxy_url')     || 'https://mlpu-proxy.aronricocl.workers.dev')
+  // Llave del Worker (secret MLPU_KEY). Vacía = el Worker no la exige todavía.
+  const [mlpuKey,     setMlpuKey]     = useState(() => LS.get('mlpu_key')      || '')
+  const [mlpuDraft,   setMlpuDraft]   = useState(() => LS.get('mlpu_key')      || '')
   const [soundOn,       setSoundOn]       = useState(() => LS.get('sound_on') !== 'false')
   // ── Sesión ML centralizada en el Worker (KV). El front ya no guarda tokens.
   const [authStatus,   setAuthStatus]   = useState(null) // { active, secs_left, expires_at } | null
@@ -367,6 +409,15 @@ export default function App() {
     if (proxyUrl) return `${proxyUrl.replace(/\/$/, '')}/ml${path}`
     return `${ML}${path}`
   }, [proxyUrl])
+
+  // Todo lo que va al proxy pasa por acá: agrega la llave del Worker (X-MLPU-Key)
+  // sin tocar el resto del init. Si no hay llave guardada no manda el header, así
+  // que sigue funcionando contra un Worker sin MLPU_KEY configurada.
+  const mlFetch = useCallback((path, init = {}) => {
+    const headers = new Headers(init.headers || {})
+    if (mlpuKey) headers.set('X-MLPU-Key', mlpuKey)
+    return fetch(mlBase(path), { ...init, headers })
+  }, [mlBase, mlpuKey])
 
   const beep = useCallback((type = 'capture') => playBeep(type, soundOn), [soundOn])
 
@@ -388,7 +439,7 @@ export default function App() {
   // ── Consultar estado de sesión al Worker (KV)
   const fetchAuthStatus = useCallback(async () => {
     try {
-      const r = await fetch(mlBase('/auth/status'), { headers: { Accept: 'application/json' } })
+      const r = await mlFetch('/auth/status', { headers: { Accept: 'application/json' } })
       const data = await r.json()
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
       setAuthStatus(data)
@@ -398,7 +449,7 @@ export default function App() {
       setAuthStatus({ active: false, secs_left: 0 })
       return null
     }
-  }, [mlBase])
+  }, [mlFetch])
 
   // ── Sembrar sesión: enviar el código OAuth al Worker (que guarda en KV)
   const initAuth = useCallback(async () => {
@@ -408,7 +459,7 @@ export default function App() {
       // Acepta URL completa de httpbin o el código pelado.
       let code = authCode.trim()
       try { code = new URL(code).searchParams.get('code') || code } catch {}
-      const r = await fetch(mlBase('/auth/init'), {
+      const r = await mlFetch('/auth/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ code, redirect_uri: 'https://httpbin.org/get' })
@@ -422,7 +473,7 @@ export default function App() {
     } finally {
       setExchanging(false)
     }
-  }, [authCode, mlBase, fetchAuthStatus])
+  }, [authCode, mlFetch, fetchAuthStatus])
 
   // Estado inicial + poll cada 60s para reflejar la sesión del Worker.
   useEffect(() => {
@@ -725,7 +776,11 @@ export default function App() {
           analysis: a, selCat: bestCat,
           editTitle: a.title || '', editPrice: a.price || 0,
           editDesc: a.description || '', editCondition: a.condition || 'used',
-          editQty: 3, listingType: 'gold_pro',
+          // F3: aca decia 'gold_pro' mientras la linea 708 fijaba 'free' en el
+          // estado. Como publishBatch lee draft.listingType, TODO lo publicado
+          // por el flujo automatico salia Premium (la comision mas cara) sin que
+          // nadie lo eligiera. Debe coincidir con setListingType() de arriba.
+          editQty: 3, listingType: 'free',
           attrValues: {}, requiredAttrs: [],
           freeShipping: false, localPickup: false,
           shippingCost: 3000, productCost: 0
@@ -734,18 +789,23 @@ export default function App() {
         setAutoCount(c => c + 1)
         beep('capture')
         setAutoStatus('✓ Guardado')
-      } catch (e) {
-        setAutoStatus('Error guardando: ' + e.message)
-      }
 
-      // limpiar y volver a CAMERA listo para el siguiente
-      setTimeout(() => {
-        setImgs([])
-        setAnalysis(null)
-        setSelCat(null)
-        setAutoStatus('')
-        setScreen(S.CAMERA)
-      }, 1200)
+        // limpiar y volver a CAMERA listo para el siguiente
+        setTimeout(() => {
+          setImgs([])
+          setAnalysis(null)
+          setSelCat(null)
+          setAutoStatus('')
+          setScreen(S.CAMERA)
+        }, 1200)
+      } catch (e) {
+        // F2: este setTimeout estaba FUERA del try, asi que borraba las fotos
+        // aunque el borrador no se hubiera guardado. Si el guardado falla nos
+        // quedamos en CONFIRM con las fotos intactas: el usuario puede liberar
+        // espacio borrando borradores viejos y reintentar sin perder el auto.
+        setAutoStatus('No se pudo guardar: ' + e.message + ' — fotos conservadas, libera espacio en Borradores')
+        setScreen(S.CONFIRM)
+      }
 
     } catch (e) {
       setAutoStatus('Error IA: ' + e.message)
@@ -773,7 +833,7 @@ export default function App() {
     ;(async () => {
       setLoadingAttrs(true)
       try {
-        const r = await fetch(mlBase(`/categories/${selCat.id}/attributes`))
+        const r = await mlFetch(`/categories/${selCat.id}/attributes`)
         if (cancelled) return
         const data = await r.json()
         const needed = (Array.isArray(data) ? data : []).filter(a => a.tags?.required && !a.tags?.fixed)
@@ -804,7 +864,7 @@ export default function App() {
       } catch (e) { log('[comp-prices]', e.message) }
     })()
     return () => { cancelled = true }
-  }, [screen, selCat?.id, mlBase])
+  }, [screen, selCat?.id, mlFetch])
 
   // ── COMMISSIONS debounced
   useEffect(() => {
@@ -815,8 +875,7 @@ export default function App() {
       try {
         const types = ['free', 'gold_special', 'gold_pro']
         const results = await Promise.allSettled(types.map(async type => {
-          const url = mlBase(`/sites/MLC/listing_prices?price=${editPrice}&listing_type_id=${type}&category_id=${selCat.id}`)
-          const r = await fetch(url)
+          const r = await mlFetch(`/sites/MLC/listing_prices?price=${editPrice}&listing_type_id=${type}&category_id=${selCat.id}`)
           if (!r.ok) return null
           const data = await r.json()
           const arr = Array.isArray(data) ? data : [data]
@@ -830,7 +889,7 @@ export default function App() {
       } catch (e) { log('[comm]', e.message); setCommissions(null) }
       finally { setLoadingComm(false) }
     }, 500)
-  }, [editPrice, listingType, screen, selCat?.id, mlBase])
+  }, [editPrice, listingType, screen, selCat?.id, mlFetch])
 
   // ── PROFIT
   const currentFee     = commissions?.[listingType]?.fee || 0
@@ -858,7 +917,7 @@ export default function App() {
         try {
           const blob = await (await fetch(`data:image/jpeg;base64,${imgB64}`)).blob()
           const form = new FormData(); form.append('file', blob, 'product.jpg')
-          const pr = await fetch(mlBase('/pictures/items/upload'), {
+          const pr = await mlFetch('/pictures/items/upload', {
             method: 'POST', body: form
           })
           if (pr.ok) { const pd = await pr.json(); pictures.push({ id: pd.id }) }
@@ -891,7 +950,7 @@ export default function App() {
           { id: 'WARRANTY_TIME',  value_name: '30 días' }
         ]
       }
-      const r = await fetch(mlBase('/items'), {
+      const r = await mlFetch('/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -912,7 +971,7 @@ export default function App() {
       // PASO B: descripción (endpoint separado desde 2021)
       if (editDesc?.trim()) {
         try {
-          await fetch(mlBase(`/items/${data.id}/description`), {
+          await mlFetch(`/items/${data.id}/description`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ plain_text: editDesc.trim() })
@@ -924,7 +983,13 @@ export default function App() {
       // Save history (in separate try/catch so thumbnail failure doesn't block save)
       try {
         const thumb = await compressToThumb(imgs[0] || '')
-        const profitNow = editPrice - currentFee - shippingDeduct - productCost
+        // F4: si la consulta de comisiones no alcanzo a responder (o fallo),
+        // `currentFee` vale 0 y la ganancia guardada quedaba inflada. Sin dato
+        // real preferimos guardar null y que el historial muestre "—".
+        const feeReal = commissions?.[listingType]?.fee
+        const profitNow = typeof feeReal === 'number'
+          ? editPrice - feeReal - shippingDeduct - productCost
+          : null
         saveToHistory({ id: data.id, title: editTitle, price: editPrice,
           thumbnail: thumb, permalink: data.permalink || '',
           fecha: new Date().toISOString(), category_name: selCat.name, ganancia_neta: profitNow })
@@ -932,9 +997,9 @@ export default function App() {
       } catch {}
       setResult(data); setCount(c => c + 1); beep('success'); setScreen(S.SUCCESS)
     } catch (e) { setErr('Error publicando: ' + e.message); setScreen(S.CONFIRM) }
-  }, [selCat, analysis, imgs, mlBase, editTitle, editPrice, editDesc, editCondition,
+  }, [selCat, analysis, imgs, mlFetch, editTitle, editPrice, editDesc, editCondition,
       editQty, listingType, requiredAttrs, attrValues, freeShipping, localPickup,
-      currentFee, shippingDeduct, productCost, beep])
+      commissions, shippingDeduct, productCost, beep])
 
   // ── SAVE DRAFT
   const saveCurrentDraft = useCallback(async () => {
@@ -992,6 +1057,7 @@ export default function App() {
     setBatchProgress({ current: 0, total: toPublish.length, title: '' })
     let published = 0
     const errors = []
+    const avisos = []   // F13: publicados pero con fotos perdidas en el camino
 
     for (let i = 0; i < toPublish.length; i++) {
       const draft = toPublish[i]
@@ -1003,16 +1069,18 @@ export default function App() {
         if (!draft.editPrice || draft.editPrice < 1) throw new Error('sin precio válido')
         // subir fotos
         const pictures = []
+        let fotosPerdidas = 0   // F13: antes se descartaban en silencio
         for (const rawB64 of (draft.imgs || [])) {
           const imgB64 = await cropSquareForML(rawB64)
           try {
             const blob = await (await fetch(`data:image/jpeg;base64,${imgB64}`)).blob()
             const form = new FormData(); form.append('file', blob, 'product.jpg')
-            const pr = await fetch(mlBase('/pictures/items/upload'), {
+            const pr = await mlFetch('/pictures/items/upload', {
               method: 'POST', body: form
             })
             if (pr.ok) { const pd = await pr.json(); pictures.push({ id: pd.id }) }
-          } catch {}
+            else fotosPerdidas++
+          } catch { fotosPerdidas++ }
         }
         if ((draft.imgs?.length || 0) > 0 && pictures.length === 0)
           throw new Error('no se pudo subir ninguna foto')
@@ -1038,18 +1106,31 @@ export default function App() {
             { id: 'WARRANTY_TIME', value_name: '30 días' }
           ]
         }
-        const r = await fetch(mlBase('/items'), {
+        const r = await mlFetch('/items', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         })
         const data = await r.json()
-        if (!r.ok) throw new Error(data.message || 'Error')
+        if (!r.ok) {
+          // F8: se tiraba `data.message || 'Error'` y se perdia `data.cause`, que
+          // es donde ML dice QUE falta. El lote reportaba "Error" a secas y no
+          // habia forma de saber que arreglar en el borrador.
+          const faltan = (data.cause || []).find(c =>
+            c.code === 'item.attributes.missing_required' || c.message?.includes('missing_required'))
+          if (faltan) {
+            const nombres = (faltan.references || []).map(id =>
+              (draft.requiredAttrs || []).find(a => a.id === id)?.name || id)
+            throw new Error(`faltan atributos obligatorios: ${nombres.join(', ')}`)
+          }
+          const causas = (data.cause || []).map(c => c.message || c.code || JSON.stringify(c)).join(' | ')
+          throw new Error(`${data.message || 'Error'}${causas ? ': ' + causas : ''}`)
+        }
         // PASO B: descripción (endpoint separado desde 2021)
         const batchDesc = draft.editDesc || draft.editTitle || ''
         if (batchDesc.trim()) {
           try {
-            await fetch(mlBase(`/items/${data.id}/description`), {
+            await mlFetch(`/items/${data.id}/description`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ plain_text: batchDesc.trim() })
@@ -1061,11 +1142,25 @@ export default function App() {
         // guardar en historial
         try {
           const thumb = await compressToThumb(draft.imgs?.[0] || '')
+          // F4: antes era `precio - costo`, sin descontar la comision de ML ni el
+          // envio gratis, asi que el historial inflaba la ganancia (precio 20.000
+          // con comision 2.600 y envio 3.000 aparecia como +$20.000 en vez de
+          // +$14.400). Se calcula igual que publish(), pidiendo la comision REAL
+          // del tipo de publicacion del borrador. El item ya esta publicado: si
+          // esta consulta falla no rompe nada, solo deja la ganancia sin dato.
+          const tipoPub = draft.listingType || 'gold_pro'
+          const fee = await fetchSaleFee(
+            mlFetch,
+            `/sites/MLC/listing_prices?price=${draft.editPrice}&listing_type_id=${tipoPub}&category_id=${draft.selCat.id}`,
+            tipoPub)
+          const envio = draft.freeShipping ? (draft.shippingCost ?? 3000) : 0
           saveToHistory({ id: data.id, title: draft.editTitle, price: draft.editPrice,
             thumbnail: thumb, permalink: data.permalink || '',
             fecha: new Date().toISOString(), category_name: draft.selCat?.name || '',
-            ganancia_neta: draft.editPrice - (draft.productCost || 0) })
+            ganancia_neta: fee == null ? null : draft.editPrice - fee - envio - (draft.productCost || 0) })
         } catch {}
+        if (fotosPerdidas)
+          avisos.push(`${draft.editTitle}: se subieron ${pictures.length} de ${(draft.imgs || []).length} fotos`)
         deleteDraft(draft.id)
         published++
       } catch (e) {
@@ -1081,13 +1176,14 @@ export default function App() {
 
     if (published > 0) {
       beep('success')
-      if (errors.length) {
-        setErr(`${published} publicados. Errores: ${errors.join(' | ')}`)
-      }
+      // F13: los avisos de fotos perdidas tambien se muestran; antes un item podia
+      // quedar publicado con 1 de 3 fotos y la UI decia "listo" sin mas.
+      const partes = [...errors, ...avisos]
+      if (partes.length) setErr(`${published} publicados. Revisar: ${partes.join(' | ')}`)
     } else if (errors.length) {
       setErr('No se pudo publicar: ' + errors.join(' | '))
     }
-  }, [drafts, selectedDrafts, mlBase, beep])
+  }, [drafts, selectedDrafts, mlFetch, beep])
 
   // Score de calidad de la publicación (endpoint performance de ML)
   useEffect(() => {
@@ -1095,7 +1191,7 @@ export default function App() {
     setPerfScore(null)
     const timer = setTimeout(async () => {
       try {
-        const r = await fetch(mlBase(`/items/${result.id}/performance`))
+        const r = await mlFetch(`/items/${result.id}/performance`)
         if (r.ok) {
           const d = await r.json()
           if (d?.score != null) setPerfScore(d)
@@ -1103,7 +1199,7 @@ export default function App() {
       } catch (_) {}
     }, 3000) // esperar 3s para que ML lo procese
     return () => clearTimeout(timer)
-  }, [screen, result?.id, mlBase])
+  }, [screen, result?.id, mlFetch])
 
   const reset = () => {
     setImgs([]); setAnalysis(null); setCats([]); setSelCat(null)
@@ -1199,6 +1295,11 @@ export default function App() {
                 <input type="password" value={anthDraft} onChange={e => setAnthDraft(e.target.value)} placeholder="sk-ant-api03-..." autoComplete="off" /></div>
               <div className="f"><label>Proxy URL</label>
                 <input value={proxyDraft} onChange={e => setProxyDraft(e.target.value)} placeholder="https://mlpu-proxy.TU.workers.dev" autoComplete="off" /></div>
+              {/* L10: el proxy inyecta el token de ML. Si el Worker tiene el secret
+                  MLPU_KEY, cualquier llamada sin esta llave recibe 401. Vacío =
+                  el Worker todavía no la exige y todo sigue igual que antes. */}
+              <div className="f"><label>Llave del Worker (MLPU_KEY)</label>
+                <input type="password" value={mlpuDraft} onChange={e => setMlpuDraft(e.target.value)} placeholder="opcional — solo si configuraste el secret" autoComplete="off" /></div>
               <div className="note">Datos guardados solo en tu navegador (<code>localStorage</code>).</div>
               <div className="toggle-row" style={{paddingTop:0,paddingBottom:0}}>
                 <div><div className="toggle-label" style={{fontSize:13}}>Sonido metálico</div>
@@ -1230,7 +1331,8 @@ export default function App() {
                 disabled={!appId || !anthDraft}
                 onClick={() => {
                   LS.set('ml_app_id', appId); LS.set('anthropic_key', anthDraft); LS.set('proxy_url', proxyDraft)
-                  setAnthKey(anthDraft); setProxyUrl(proxyDraft)
+                  LS.set('mlpu_key', mlpuDraft.trim())
+                  setAnthKey(anthDraft); setProxyUrl(proxyDraft); setMlpuKey(mlpuDraft.trim())
                   setScreen(S.CAMERA)
                 }}>Guardar y comenzar →</button>
             </div>
@@ -1726,7 +1828,10 @@ export default function App() {
                         </div>
                       </div>
                       <div style={{textAlign:'right'}}>
-                        <div className="hist-gain">+${fmt(h.ganancia_neta)}</div>
+                        {/* F4: sin comision conocida no inventamos una ganancia */}
+                        <div className="hist-gain">
+                          {h.ganancia_neta == null ? '—' : `+$${fmt(h.ganancia_neta)}`}
+                        </div>
                         <div style={{fontSize:9,color:'var(--dim)',marginTop:2}}>ganancia</div>
                       </div>
                     </div>

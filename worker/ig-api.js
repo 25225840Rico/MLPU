@@ -5,8 +5,13 @@
  */
 
 import { maxResPicture, blurImageUrl, liteImageUrl, cloudinaryBlurUrl } from './ig-logic.js'
+import { gastar, restante } from './ig-budget.js'
 
-const GRAPH = 'https://graph.facebook.com/v21.0'
+// #3: había DOS versiones conviviendo (v21.0 aquí, v25.0 en igDeleteMedia).
+// v25.0 es la vigente; las versiones antiguas se van deprecando en bloque
+// (v20.0 caduca el 24-sep-2026) y una llamada contra una versión muerta
+// devuelve error 2635 sin previo aviso. Una sola constante para todo el módulo.
+const GRAPH = 'https://graph.facebook.com/v25.0'
 const REFRESH_AFTER_MS = 45 * 24 * 3600 * 1000 // renovar a los 45 días (expira a los 60)
 const log = (...a) => console.log('[IG]', ...a)
 
@@ -22,6 +27,7 @@ async function saveMetaToken(db, token) {
 }
 
 async function graphPost(path, params) {
+  gastar()
   const r = await fetch(`${GRAPH}/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -38,15 +44,37 @@ export const _setRetryBaseMs = ms => { RETRY_BASE_MS = ms } // solo para tests
 
 // Espera a que Meta termine de procesar el contenedor consultando su
 // status_code (publica APENAS está listo, en vez de reintentos ciegos).
-// Hasta ~60 s: las imágenes compuestas (blur 1080x1920) tardan más que los
+// Hasta ~65 s: las imágenes compuestas (blur 1080x1920) tardan más que los
 // 15 s del poll original, que terminaba en "Media ID is not available".
-let POLL_MS = 2000
-export const _setPollMs = ms => { POLL_MS = ms } // solo para tests
+//
+// RENDIMIENTO (2026-07-26). Antes: 30 polls a 2 s fijos. Eso costaba dos cosas:
+//  - latencia: el caso normal (Cloudinary ya tiene la imagen, Meta la procesa en
+//    ~1-2 s) igual esperaba 2 s completos antes de la primera consulta;
+//  - presupuesto: 30 polls + crear + publicar = 32 subrequests por IMAGEN, y una
+//    fila publica dos (feed + historia) = 64 > los 50 del plan Free. Una sola
+//    imagen lenta reventaba la invocación entera y mataba la corrida.
+// Ahora la espera arranca en 0,5 s y crece (0,5 → 1 → 2 → 4 → 8 s): el caso
+// normal responde ~4 veces más rápido y el peor caso cubre los mismos ~65 s con
+// 12 consultas en vez de 30 (14 subrequests por imagen). Además se corta si el
+// presupuesto de la invocación se agota: mejor intentar publicar con lo que hay
+// —media_publish tiene su propio reintento— que morir por exceso de subrequests.
+const POLL_PLAN_MS = [500, 1000, 2000, 4000, 8000]
+const MAX_POLLS = 12
+const RESERVA_PUBLICAR = 3   // create + publish + un reintento
+let POLL_MS = null
+export const _setPollMs = ms => { POLL_MS = ms } // solo para tests (espera fija)
+const esperaPoll = i => POLL_MS ?? POLL_PLAN_MS[Math.min(i, POLL_PLAN_MS.length - 1)]
+
 async function waitForContainer(contId, token) {
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < MAX_POLLS; i++) {
+    if (restante() <= RESERVA_PUBLICAR) {
+      log(`presupuesto de subrequests casi agotado; dejo de consultar ${contId} y publico igual`)
+      return
+    }
+    gastar()
     const r = await fetch(`${GRAPH}/${contId}?fields=status_code&access_token=${encodeURIComponent(token)}`)
     const data = await r.json().catch(() => ({}))
-    if (data.status_code === 'IN_PROGRESS') { await sleep(POLL_MS); continue }
+    if (data.status_code === 'IN_PROGRESS') { await sleep(esperaPoll(i)); continue }
     if (data.status_code === 'ERROR' || data.status_code === 'EXPIRED')
       throw new Error(`contenedor ${contId} quedó en ${data.status_code}`)
     return // FINISHED, o status desconocido/no legible → intentar publicar igual
@@ -92,10 +120,18 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
   // siguiente eslabón ante errores de imagen/descarga; un rate-limit o token
   // vencido fallaría igual en todos y duplicaría llamadas.
   const best = maxResPicture(imageUrl)
+  // #1: el compositor propio (/ig/img) solo acepta fotos de mlstatic.com — es
+  // una whitelist deliberada, no un descuido: abrirla lo convertiría en un proxy
+  // de imágenes abierto y reviviría el error 1102 de CPU que obligó a migrar a
+  // Cloudinary. Con las filas de fuente 'drive' (foto servida por el propio
+  // Worker) esos dos eslabones devolvían 403 SIEMPRE: Meta contestaba "Media
+  // download failed" y se quemaban dos contenedores y dos esperas por imagen
+  // antes de llegar al eslabón útil. Para URLs que no son de ML la cadena es
+  // Cloudinary (sí sabe traer cualquier URL pública) → original.
+  const esML = /(^|\.)mlstatic\.com$/.test(hostDe(best))
   const cadena = [
     ...(env.CLOUDINARY_CLOUD ? [cloudinaryBlurUrl(env.CLOUDINARY_CLOUD, best, story)] : []),
-    blurImageUrl(env.PUBLIC_URL, best, story),
-    liteImageUrl(env.PUBLIC_URL, best, story),
+    ...(esML ? [blurImageUrl(env.PUBLIC_URL, best, story), liteImageUrl(env.PUBLIC_URL, best, story)] : []),
     imageUrl,
   ]
   for (let i = 0; ; i++) {
@@ -111,13 +147,16 @@ export async function igPublishImage(env, { imageUrl, caption, story = false, ra
 const esErrorDeImagen = (e) => /image|photo|media|download|fetch|url/i.test(e.message) &&
   !/rate|limit|token|permission|oauth|not available/i.test(e.message)
 
+const hostDe = u => { try { return new URL(u).hostname } catch { return '' } }
+
 // Borra un media de IG (post, historia o reel). Soportado por la Graph API
 // con Facebook Login (DELETE /<media_id>); requiere que el token tenga el
 // permiso instagram_manage_contents. Las historias expiran solas a las 24 h,
 // así que solo tiene sentido para historias "vivas".
 export async function igDeleteMedia(env, mediaId) {
   const token = await getMetaToken(env.DB)
-  const r = await fetch(`https://graph.facebook.com/v25.0/${mediaId}?access_token=${encodeURIComponent(token)}`,
+  gastar()
+  const r = await fetch(`${GRAPH}/${mediaId}?access_token=${encodeURIComponent(token)}`,
     { method: 'DELETE' })
   const data = await r.json().catch(() => ({}))
   if (!r.ok || data.error) throw new Error(data.error?.message || `delete ${r.status}`)
@@ -132,6 +171,7 @@ export async function fetchMediaInteractions(env, mediaIds) {
   const out = {}
   for (let i = 0; i < mediaIds.length; i += 50) {
     const chunk = mediaIds.slice(i, i + 50)
+    gastar()
     const r = await fetch(`${GRAPH}/?ids=${chunk.join(',')}&fields=like_count,comments_count&access_token=${encodeURIComponent(token)}`)
     const data = await r.json().catch(() => ({}))
     if (!r.ok || data.error) { log('interacciones falló:', data.error?.message || r.status); continue }
@@ -147,6 +187,7 @@ export async function fetchMediaInteractions(env, mediaIds) {
 // 2026-07-16 en @topwheels.cl: quota_total=100 y las HISTORIAS también cuentan.
 export async function fetchPublishingQuota(env) {
   const token = await getMetaToken(env.DB)
+  gastar()
   const r = await fetch(`${GRAPH}/${env.IG_USER_ID}/content_publishing_limit?fields=quota_usage,config&access_token=${encodeURIComponent(token)}`)
   const data = await r.json()
   if (!r.ok || data.error) throw new Error(data.error?.message || `quota ${r.status}`)
@@ -159,6 +200,7 @@ export async function fetchPublishingQuota(env) {
 export async function fetchOnlineFollowers(env) {
   const token = await getMetaToken(env.DB)
   const url = `${GRAPH}/${env.IG_USER_ID}/insights?metric=online_followers&period=lifetime&access_token=${encodeURIComponent(token)}`
+  gastar()
   const r = await fetch(url)
   const data = await r.json()
   if (!r.ok || data.error) throw new Error(data.error?.message || `insights ${r.status}`)
@@ -179,6 +221,7 @@ export async function maybeRefreshMetaToken(env) {
   const url = `${GRAPH}/oauth/access_token?grant_type=fb_exchange_token` +
     `&client_id=${encodeURIComponent(env.META_APP_ID)}&client_secret=${encodeURIComponent(env.META_APP_SECRET)}` +
     `&fb_exchange_token=${encodeURIComponent(token)}`
+  gastar()
   const r = await fetch(url)
   const data = await r.json()
   if (!r.ok || data.error || !data.access_token) throw new Error(data.error?.message || 'no se pudo renovar el token')

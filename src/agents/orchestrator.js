@@ -2,13 +2,38 @@ const DEBUG = false
 const log = (...a) => { if (DEBUG) console.log(...a) }
 
 // Validador de título SEO según reglas oficiales de MercadoLibre
-function cleanTitle(title, maxLen = 60) {
+export function cleanTitle(title, maxLen = 60) {
+  // F10: la clase de caracteres borraba guiones, puntos y barras, que son parte
+  // del nombre real del producto ("RX-7" -> "RX 7", "1/64" -> "1 64",
+  // "talla 42.5" -> "42 5"); y la lista negra tenia "full" como palabra suelta,
+  // que se comia el "Full" de "Full HD". Se conservan - . / , y la lista negra
+  // queda solo con frases promocionales, que es lo que ML realmente prohibe.
   return (title || '')
-    .replace(/[^a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s]/g, ' ') // sin símbolos ni puntuación
-    .replace(/\b(envío gratis|cuotas|descuento|full|stock|nuevo|usado|reacondicionado)\b/gi, '')
+    .replace(/[^a-záéíóúüñA-ZÁÉÍÓÚÜÑ0-9\s\-./,]/g, ' ') // sin simbolos promocionales
+    .replace(/\b(envío gratis|envio gratis|sin interés|sin interes|\d+\s*cuotas|descuento|oferta|promoción|promocion)\b/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim()
     .slice(0, maxLen)
+}
+
+// F6: antes era `Number(price.price) || 10000`. Con el formato chileno que suele
+// devolver la IA eso publicaba a precio de regalo o inventaba uno:
+//   "15.000"    -> Number() da 15      -> se publicaba a $15
+//   "$15.000"   -> NaN                 -> $10.000 silencioso
+//   "15000 CLP" -> NaN                 -> $10.000 silencioso
+// El CLP no usa decimales, asi que nos quedamos solo con los digitos. Si el
+// resultado no es creible devolvemos null: el borrador queda SIN precio y
+// publishBatch (que exige >= 1) lo frena para que una persona lo revise, en vez
+// de publicar una cifra inventada.
+const PRECIO_MIN_CLP = 500
+const PRECIO_MAX_CLP = 20_000_000
+export function parsePrecioCLP(v) {
+  if (typeof v === 'number') return Number.isFinite(v) && v >= PRECIO_MIN_CLP && v <= PRECIO_MAX_CLP ? Math.round(v) : null
+  if (typeof v !== 'string') return null
+  const digitos = v.replace(/[^\d]/g, '')
+  if (!digitos) return null
+  const n = Number(digitos)
+  return n >= PRECIO_MIN_CLP && n <= PRECIO_MAX_CLP ? n : null
 }
 
 async function compressImage(b64, maxW = 1024, quality = 0.82) {
@@ -133,7 +158,7 @@ Responde SOLO JSON: {"title":"título"}`,
     features:         vision.features   || [],
     description,
     title:            cleanTitle(seo.title || vision.product || 'Producto'),
-    price:            Number(price.price) || 10000,
+    price:            parsePrecioCLP(price.price),
     categorySearches: category.searches || []
   }
   return result

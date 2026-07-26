@@ -22,6 +22,7 @@
 import { handleTelegramWebhook, tgSend } from './telegram-bot.js'
 import { recordOrderFromML } from './orders.js'
 import { runIgPublisher, runIgDaily } from './ig-queue.js'
+import { esc } from './ig-logic.js'
 import { mlFetch } from './ml-fetch.js'
 import { runCatchup } from './backfill.js'
 
@@ -35,7 +36,8 @@ let refreshingPromise = null
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  // X-MLPU-Key: sin declararla acá el navegador aborta el preflight del SPA.
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-MLPU-Key',
   'Access-Control-Max-Age': '86400',
 }
 
@@ -243,12 +245,41 @@ async function processOrderNotification(env, resource) {
   await recordOrderFromML(env, order, shipment)
 }
 
+// ── Llave del Worker (secret MLPU_KEY) ────────────────────────
+// El proxy /ml/* inyecta el token de ML del vendedor: sin llave, cualquiera que
+// conozca la URL del Worker publica, edita o lee las ventas de la cuenta. La
+// llave es OPCIONAL a propósito: mientras el secret no exista el Worker se
+// comporta igual que antes, así que desplegar esto no rompe nada. Recién cuando
+// se corre `wrangler secret put MLPU_KEY` (y se pega la misma llave en el SPA,
+// pantalla de ajustes) las rutas quedan cerradas.
+//
+// Comparación en tiempo constante: un `!==` filtra la llave carácter a carácter
+// por diferencia de tiempo de respuesta.
+function llaveValida(recibida, esperada) {
+  const a = String(recibida || ''), b = String(esperada || '')
+  if (a.length !== b.length) return false
+  let dif = 0
+  for (let i = 0; i < a.length; i++) dif |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return dif === 0
+}
+
+// Devuelve null si la request puede pasar, o la Response 401 que la corta.
+function exigirLlave(request, env) {
+  if (!env.MLPU_KEY) return null                 // sin secret: comportamiento previo
+  const url = new URL(request.url)
+  const recibida = request.headers.get('X-MLPU-Key') || url.searchParams.get('key') || ''
+  if (llaveValida(recibida, env.MLPU_KEY)) return null
+  return json({ error: 'No autorizado: falta o no coincide la llave del Worker (X-MLPU-Key).' }, 401)
+}
+
 // ── Proxy genérico con token inyectado ────────────────────────
 async function handleProxy(request, env, mlPath, search) {
   const buildHeaders = (token) => {
     const h = new Headers()
+    // 'x-mlpu-key' va en el skip: es NUESTRA llave, no tiene por qué viajar a ML.
     const skip = new Set(['host', 'cf-ray', 'cf-connecting-ip', 'x-forwarded-for',
-                          'x-real-ip', 'cf-ipcountry', 'cf-visitor', 'authorization'])
+                          'x-real-ip', 'cf-ipcountry', 'cf-visitor', 'authorization',
+                          'x-mlpu-key'])
     for (const [k, v] of request.headers.entries()) {
       if (!skip.has(k.toLowerCase())) h.set(k, v)
     }
@@ -323,6 +354,11 @@ async function handleTgAdmin(request, env, ctx) {
   }
 
   if (action === 'set') {
+    // secret_token: Telegram lo repite en el header X-Telegram-Bot-Api-Secret-Token
+    // de cada update, y handleTelegramWebhook lo exige. ES OBLIGATORIO volver a
+    // correr ?action=set después de configurar TELEGRAM_WEBHOOK_SECRET: si el
+    // secret existe en el Worker pero Telegram no lo manda, TODOS los updates
+    // se descartan con 401 y el bot queda mudo.
     const r = await fetch(`${tgBase}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -330,17 +366,68 @@ async function handleTgAdmin(request, env, ctx) {
         url: hookUrl,
         allowed_updates: ['message', 'callback_query'],
         drop_pending_updates: false,
+        ...(env.TELEGRAM_WEBHOOK_SECRET ? { secret_token: env.TELEGRAM_WEBHOOK_SECRET } : {}),
       }),
     })
-    return json({ action: 'set', webhook: hookUrl, telegram: await r.json() })
+    return json({
+      action: 'set',
+      webhook: hookUrl,
+      secret_token: env.TELEGRAM_WEBHOOK_SECRET ? 'registrado' : 'no configurado',
+      telegram: await r.json(),
+    })
   }
 
   // info (por defecto): no expone el token, solo el estado del webhook.
+  // `has_custom_certificate`/`pending_update_count` vienen de Telegram; el
+  // diagnóstico propio avisa del desajuste que deja al bot mudo.
+  // OJO: getWebhookInfo NO dice si Telegram tiene registrado un secret_token,
+  // así que el desajuste no se puede detectar acá; solo se puede avisar.
   const r = await fetch(`${tgBase}/getWebhookInfo`)
-  return json({ action: 'info', telegram: await r.json() })
+  return json({
+    action: 'info',
+    telegram: await r.json(),
+    seguridad: {
+      webhook_secret_en_worker: !!env.TELEGRAM_WEBHOOK_SECRET,
+      mlpu_key_en_worker: !!env.MLPU_KEY,
+      aviso: env.TELEGRAM_WEBHOOK_SECRET
+        ? 'Si el bot dejó de responder, corré ?action=set: Telegram necesita registrar el secret_token.'
+        : 'Sin TELEGRAM_WEBHOOK_SECRET el webhook acepta POSTs de cualquiera.',
+    },
+  })
 }
 
 // ── Router ────────────────────────────────────────────────────
+// Sirve una foto de Google Drive como JPEG público (proxy para IG/Cloudinary).
+// Cachea 24 h en el edge para no repegarle a Drive en cada fetch de Meta.
+async function serveDriveImage(rawId, ctx) {
+  const fileId = (rawId || '').split('/')[0].split('?')[0].trim()
+  if (!/^[A-Za-z0-9_-]{10,}$/.test(fileId)) {
+    return new Response('bad drive id', { status: 400, headers: CORS })
+  }
+  const cache = caches.default
+  const key = new Request(`https://img.drive/${fileId}`)
+  const hit = await cache.match(key)
+  if (hit) return hit
+
+  const sources = [
+    `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`,
+    `https://drive.usercontent.google.com/download?id=${fileId}&export=download`,
+  ]
+  for (const src of sources) {
+    const r = await fetch(src, { redirect: 'follow' })
+    const ct = r.headers.get('content-type') || ''
+    if (r.ok && ct.startsWith('image/')) {
+      const resp = new Response(r.body, {
+        status: 200,
+        headers: { 'Content-Type': ct, 'Cache-Control': 'public, max-age=86400', ...CORS },
+      })
+      ctx.waitUntil(cache.put(key, resp.clone()))
+      return resp
+    }
+  }
+  return new Response('drive image not available', { status: 502, headers: CORS })
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
@@ -359,8 +446,10 @@ export default {
     // GET /tg/admin?action=set   → re-registra el webhook a este Worker
     // Útil si el webhook se perdió (p. ej. al correr el bot en polling con el
     // mismo token, que lo borra). Usa el secret TELEGRAM_BOT_TOKEN del Worker.
+    // Cerrado con MLPU_KEY cuando el secret existe: 'set'/'off' reconfiguran el
+    // webhook del bot y 'catchup' dispara trabajo real contra ML.
     if (url.pathname === '/tg/admin' && request.method === 'GET') {
-      return handleTgAdmin(request, env, ctx)
+      return exigirLlave(request, env) || handleTgAdmin(request, env, ctx)
     }
 
     // ── Compositor de imágenes para IG (fondo blur; import dinámico para no
@@ -368,6 +457,16 @@ export default {
     if (url.pathname === '/ig/img' && request.method === 'GET') {
       const { igImageProxy } = await import('./ig-image.js')
       return igImageProxy(request, env)
+    }
+
+    // ── Proxy de imágenes de Google Drive (inventario propio, fuente 'drive') ──
+    // GET /img/drive/<fileId> → sirve la foto de Drive como imagen pública para
+    // que Instagram (Graph API) y Cloudinary puedan tomarla: los links de Drive
+    // no sirven directo como image_url. Usa el endpoint `thumbnail`, que
+    // transcodifica a JPEG (resuelve HEIC del iPhone) y evita el interstitial de
+    // "análisis de virus" de las descargas grandes.
+    if (url.pathname.startsWith('/img/drive/') && request.method === 'GET') {
+      return serveDriveImage(url.pathname.slice('/img/drive/'.length), ctx)
     }
 
     if (!url.pathname.startsWith('/ml/')) {
@@ -382,28 +481,44 @@ export default {
     const mlPath = url.pathname.replace(/^\/ml/, '')
 
     try {
+      // Siembra la sesión de ML en KV → con llave (quien la toque secuestra la
+      // sesión del Worker).
       if (mlPath === '/auth/init' && request.method === 'POST') {
-        return await handleAuthInit(request, env)
+        return exigirLlave(request, env) || await handleAuthInit(request, env)
       }
+      // Sin llave a propósito: solo dice si la sesión está viva y cuánto le
+      // queda. No expone token ni datos, y el SPA lo consulta en cada carga.
       if (mlPath === '/auth/status' && request.method === 'GET') {
         return await handleAuthStatus(env)
       }
       if (mlPath === '/notifications' && request.method === 'POST') {
+        // Sin llave a propósito: lo llama MercadoLibre, que no puede mandar
+        // nuestro header. No expone datos (responde 200 vacío) y solo dispara
+        // una lectura de la orden contra ML.
         return await handleMlNotification(request, env, ctx)
       }
-      // Resto: proxy con token inyectado desde KV.
-      return await handleProxy(request, env, mlPath, url.search)
+      // Resto: proxy con el token del vendedor inyectado → exige la llave.
+      return exigirLlave(request, env) || await handleProxy(request, env, mlPath, url.search)
     } catch (e) {
       return json({ error: e.message || 'Error interno del Worker' }, 500)
     }
   },
 
-  // Crons: '*/30 * * * *' publica la cola de IG dentro de ventanas óptimas;
-  // '0 10 * * *' (06:00 Chile) recalcula ventanas y renueva token de Meta.
-  // OJO: el post-venta (runScheduled de scheduler.js) sigue APAGADO adrede.
+  // Crons (ver worker/wrangler.toml): '* * * * *' corre el publisher de IG cada
+  // minuto (rush / goteo / ventanas; las guardas baratas descartan el tick que no
+  // toca); '0 10 * * *' (06:00 Chile) recalcula ventanas y renueva el token de
+  // Meta. OJO: el post-venta (runScheduled de scheduler.js) sigue APAGADO adrede.
+  //
+  // El .catch NO es decorativo: waitUntil() se traga la excepción y el tick
+  // moría en silencio (cola congelada con el panel diciendo "🔥 RUSH activo").
+  // Que el aviso falle no puede tumbar el handler, de ahí el catch anidado.
   async scheduled(event, env, ctx) {
     const notify = t => tgSend(env, env.TELEGRAM_CHAT_ID, t)
-    if (event.cron === '0 10 * * *') ctx.waitUntil(runIgDaily(env, notify))
-    else ctx.waitUntil(runIgPublisher(env, { notify }))
+    const blindar = (tarea, quien) => tarea.catch(async e => {
+      console.error(`[IG] ${quien} murió:`, e?.stack || e?.message || e)
+      try { await notify(`⚠️ IG: el cron ${quien} falló: ${esc(e?.message || e)}`) } catch {}
+    })
+    if (event.cron === '0 10 * * *') ctx.waitUntil(blindar(runIgDaily(env, notify), 'diario'))
+    else ctx.waitUntil(blindar(runIgPublisher(env, { notify }), 'publisher'))
   },
 }
